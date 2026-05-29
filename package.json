@@ -1,0 +1,10 @@
+{
+  "name": "return-of-boxworld",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minecraft Bedrock 統合版アドオン「Return of BoxWorld」",
+  "scripts": {
+    "sync:project-docs": "node scripts/sync-project-docs.mjs",
+    "sync:project-docs:check": "node scripts/sync-project-docs.mjs --check"
+  }
+}

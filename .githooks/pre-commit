@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+node scripts/sync-project-docs.mjs 2>/dev/null || true
+
+if git diff --quiet -- docs/project-sync.md 2>/dev/null; then
+  exit 0
+fi
+
+git add docs/project-sync.md
+echo "pre-commit: docs/project-sync.md を自動更新してステージしました"

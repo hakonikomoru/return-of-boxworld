@@ -1,0 +1,7 @@
+{
+  "repo": "hakonikomoru/return-of-boxworld",
+  "rootLabel": "return-of-boxworld",
+  "treeMaxDepth": 2,
+  "markers": ["meta", "directory-tree"],
+  "treeEntries": ["behavior_packs", "docs", "scripts"]
+}
