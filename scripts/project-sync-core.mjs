@@ -192,6 +192,233 @@ export function generateSrcTable(rows) {
   return lines.join("\n");
 }
 
+function parseConfigStringArray(block, key) {
+  const re = new RegExp(`${key}:\\s*\\[([\\s\\S]*?)\\]`, "m");
+  const match = block.match(re);
+  if (!match) return [];
+  const items = [];
+  const itemRe = /"([^"]+)"/g;
+  let m;
+  while ((m = itemRe.exec(match[1])) !== null) items.push(m[1]);
+  return items;
+}
+
+function parseConfigObjectEntries(block, key) {
+  const re = new RegExp(`${key}:\\s*\\{([^}]*)\\}`, "m");
+  const match = block.match(re);
+  if (!match) return [];
+  const entries = [];
+  const entryRe = /"([^"]+)":\s*"([^"]+)"/g;
+  let m;
+  while ((m = entryRe.exec(match[1])) !== null) {
+    entries.push({ label: m[1], action: m[2] });
+  }
+  return entries;
+}
+
+function parseConfigNumber(block, key) {
+  const re = new RegExp(`${key}:\\s*(-?\\d+(?:\\.\\d+)?)`);
+  const match = block.match(re);
+  return match ? Number(match[1]) : undefined;
+}
+
+function parseConfigString(block, key) {
+  const re = new RegExp(`${key}:\\s*"([^"]*)"`);
+  const match = block.match(re);
+  return match ? match[1] : undefined;
+}
+
+function parseCoordBlock(block, key) {
+  const match = block.match(new RegExp(`${key}:\\s*\\{([^}]+)\\}`));
+  if (!match) return {};
+  const inner = match[1];
+  const num = (k) => {
+    const m = inner.match(new RegExp(`${k}:\\s*(-?\\d+(?:\\.\\d+)?)`));
+    return m ? Number(m[1]) : undefined;
+  };
+  return {
+    x: num("x"),
+    y: num("y"),
+    z: num("z"),
+    radius: num("radius"),
+  };
+}
+
+function parseBoxGate(block) {
+  return parseCoordBlock(block, "BOX_GATE");
+}
+
+export function parseRobwGameSpec(mainJsSource) {
+  const configMatch = mainJsSource.match(/const CONFIG = \{([\s\S]*?)\n\};/);
+  if (!configMatch) {
+    throw new Error("const CONFIG = { ... } が main.js に見つかりません");
+  }
+  const block = configMatch[1];
+  const milestoneMatch = mainJsSource.match(
+    /const MILESTONE_SECONDS = \[([^\]]+)\]/,
+  );
+  const milestones = milestoneMatch
+    ? milestoneMatch[1]
+        .split(",")
+        .map((s) => Number(s.trim()))
+        .filter((n) => !Number.isNaN(n))
+    : [];
+
+  return {
+    gateOpenMinutes: parseConfigNumber(block, "GATE_OPEN_MINUTES"),
+    timeNotifyIntervalSeconds: parseConfigNumber(
+      block,
+      "TIME_NOTIFY_INTERVAL_SECONDS",
+    ),
+    protectionRadius: parseConfigNumber(block, "PROTECTION_RADIUS"),
+    boxGate: parseBoxGate(block),
+    submissionChest: parseCoordBlock(block, "SUBMISSION_CHEST"),
+    gateSummonOffsetY: parseConfigNumber(block, "GATE_SUMMON_OFFSET_Y"),
+    startGiveBones: parseConfigNumber(block, "START_GIVE_BONES"),
+    startSpawnHakoinu: parseConfigNumber(block, "START_SPAWN_HAKOINU"),
+    hakoinuSpawnDistance: parseConfigNumber(block, "HAKOINU_SPAWN_DISTANCE"),
+    chestFlatSearchRadius: parseConfigNumber(block, "CHEST_FLAT_SEARCH_RADIUS"),
+    protectItem: parseConfigString(block, "PROTECT_ITEM"),
+    returnBoxItem: parseConfigString(block, "RETURN_BOX_ITEM"),
+    returnBoxName: parseConfigString(block, "RETURN_BOX_NAME"),
+    wrongReturnBoxName: parseConfigString(block, "WRONG_RETURN_BOX_NAME"),
+    hakoinuEntityTypes: parseConfigStringArray(block, "HAKOINU_ENTITY_TYPES"),
+    penaltyAnimalTypes: parseConfigStringArray(block, "PENALTY_ANIMAL_TYPES"),
+    pointsPerBox: parseConfigNumber(block, "POINTS_PER_BOX"),
+    pointsWrongAnimal: parseConfigNumber(block, "POINTS_WRONG_ANIMAL"),
+    scoreObjective: parseConfigString(block, "SCORE_OBJECTIVE"),
+    chatPrefix: parseConfigString(block, "CHAT_PREFIX"),
+    wandItem: parseConfigString(block, "WAND_ITEM"),
+    wandNames: parseConfigObjectEntries(block, "WAND_NAMES"),
+    milestoneSeconds: milestones,
+  };
+}
+
+const ENTITY_LABELS = {
+  "minecraft:wolf": "オオカミ（ハコイヌ代用）",
+  "minecraft:cow": "牛",
+  "minecraft:pig": "豚",
+  "minecraft:sheep": "羊",
+  "minecraft:chicken": "鶏",
+  "minecraft:goat": "ヤギ",
+  "minecraft:rabbit": "ウサギ",
+  "minecraft:horse": "馬",
+  "minecraft:donkey": "ロバ",
+  "minecraft:mule": "ラバ",
+  "minecraft:llama": "ラマ",
+  "minecraft:fox": "キツネ",
+  "minecraft:cat": "ネコ",
+  "minecraft:mooshroom": "ムーシュルーム",
+  "minecraft:parrot": "オウム",
+  "minecraft:camel": "ラクダ",
+};
+
+function entityLabel(typeId) {
+  return ENTITY_LABELS[typeId] ?? `\`${typeId}\``;
+}
+
+export function generateGameRulesMarkdown(spec, mcFunctions = []) {
+  const g = spec.boxGate ?? {};
+  const chest = spec.submissionChest ?? {};
+  const gateCoord = `(${g.x ?? "?"}, ${g.y ?? "?"}, ${g.z ?? "?"})`;
+  const chestCoord = `(${chest.x ?? "?"}, ${chest.y ?? "?"}, ${chest.z ?? "?"})`;
+  const lines = [
+    "> behavior_packs/robw_behavior/scripts/main.js の CONFIG から自動生成。仕様変更後は npm run sync:project-docs を実行。",
+    "",
+    "### 用語",
+    "",
+    "| ゲーム内 | 実装 |",
+    "|----------|------|",
+    "| ハコイヌ | " +
+      spec.hakoinuEntityTypes.map(entityLabel).join("、") +
+      " |",
+    `| 捕獲アイテム（ハコイヌ） | ${spec.returnBoxItem}（名前: ${spec.returnBoxName}） |`,
+    `| 捕獲アイテム（別種） | 同 ${spec.returnBoxItem}（名前: ${spec.wrongReturnBoxName}） |`,
+    "| 納品チェスト | 座標に設置したチェスト（下表） |",
+    "| 集合エリア | ゲート起動時の招集先（下表） |",
+    `| 帰還ポイント | スコアボード \`${spec.scoreObjective}\` |`,
+    "",
+    "### ゲート起動時（start）",
+    "",
+    `- 全員の帰還ポイントを **0** にリセット`,
+    `- ゲート開放 **${spec.gateOpenMinutes} 分**（残り ${spec.timeNotifyIntervalSeconds} 秒ごとに通知、残り ${spec.milestoneSeconds.join(" / ")} 秒で目立つ警告）`,
+    `- 全員をボックスゲート ${gateCoord} 付近へテレポート（Y オフセット: ${spec.gateSummonOffsetY}）`,
+    `- **骨 ×${spec.startGiveBones}** を全員に配布（所持分はいったん消してからセット）`,
+    `- **ハコイヌ ${spec.startSpawnHakoinu} 匹** をゲート中心から約 **${spec.hakoinuSpawnDistance} ブロック** にスポーン`,
+    `- **納品チェスト**を BOX_GATE（Y${g.y ?? "?"}）付近 **半径 ${spec.chestFlatSearchRadius ?? "?"}** 内の **平坦な 3×3** に **1つだけ** 自動設置（同エリア内の既存チェスト類は起動時に撤去）`,
+    "- 終了・リセット時にスクリプトが出したハコイヌと納品チェストは片付けられる",
+    "",
+    "### プレイの流れ",
+    "",
+    "1. ゲート起動",
+    `2. **${spec.protectItem}** を持ち、**${spec.protectionRadius} ブロック以内**の動物を **空中で右クリック**（捕獲）`,
+    `3. ハコイヌ → **${spec.returnBoxName}** / 他の動物 → **${spec.wrongReturnBoxName}**（${spec.returnBoxItem}）`,
+    `4. 捕獲アイテムを **自動設置の納品チェスト（1つ）** に入れる → 得点加算のあと **毛皮はチェストから消える**`,
+    "5. 時間切れまたは stop で閉鎖 → ランキング",
+    "",
+    "### スコア",
+    "",
+    "| 内容 | 点数 |",
+    "|------|------|",
+    `| ハコイヌを納品チェストに入れる | **${spec.pointsPerBox > 0 ? "+" : ""}${spec.pointsPerBox} pt** / 匹分 |`,
+    `| 別種の動物を納品チェストに入れる | **${spec.pointsWrongAnimal} pt** / 匹分 |`,
+    "",
+    "ペナルティ対象の動物:",
+    "",
+    ...spec.penaltyAnimalTypes.map((id) => `- ${entityLabel(id)}（\`${id}\`）`),
+    "",
+    "### 納品チェスト（CONFIG.SUBMISSION_CHEST）",
+    "",
+    "| 項目 | 値 |",
+    "|------|-----|",
+    `| X | ${chest.x ?? "?"} |`,
+    `| Y | ${chest.y ?? "?"} |`,
+    `| Z | ${chest.z ?? "?"} |`,
+    "",
+    "> ゲート起動時にスクリプトが平坦な場所を探して **チェストを1つだけ自動設置**（周囲の既存チェスト類は撤去。座標は起動メッセージを参照）。",
+    "",
+    "### 集合エリア（CONFIG.BOX_GATE）",
+    "",
+    "| 項目 | 値 |",
+    "|------|-----|",
+    `| X | ${g.x ?? "?"} |`,
+    `| Y | ${g.y ?? "?"} |`,
+    `| Z | ${g.z ?? "?"} |`,
+    `| 半径 | ${g.radius ?? "?"} |`,
+    "",
+    "> ワールドごとに main.js の座標を手動調整する（自動同期はコードのデフォルト）。",
+    "",
+    "### 操作・コマンド",
+    "",
+    "| 種別 | 入力 | 備考 |",
+    "|------|------|------|",
+    `| チャット | \`${spec.chatPrefix} start\` / \`stop\` / \`reset\` / \`ranking\` | **Beta APIs** 必須 |`,
+    ...spec.wandNames.map(
+      (w) =>
+        `| 時計（${spec.wandItem}） | 名前 \`${w.label}\` を空中で右クリック | → \`${w.action}\` |`,
+    ),
+    ...mcFunctions.map(
+      (name) => `| 関数 | \`/function robw/${name}\` | チート ON |`,
+    ),
+    `| scriptevent | \`/scriptevent robw:start\` 等 | チート ON |`,
+    "",
+    "### ゲーム状態",
+    "",
+    "- waiting … 待機",
+    "- running … ゲート開放中（骨での保護・ゲート帰還のみ有効）",
+    "- finished … 閉鎖済み（ランキング表示後）",
+  ];
+  return lines.join("\n");
+}
+
+export function collectMcFunctions(functionsDir) {
+  if (!existsSync(functionsDir)) return [];
+  return listSorted(functionsDir)
+    .filter((name) => name.endsWith(".mcfunction"))
+    .map((name) => name.replace(/\.mcfunction$/, ""))
+    .sort((a, b) => a.localeCompare(b, "en"));
+}
+
 export function runSync(config, options = {}) {
   const { check = false } = options;
   const root = config.root ?? join(import.meta.dirname, "..");
@@ -234,6 +461,20 @@ export function runSync(config, options = {}) {
   if (markers.includes("src-tree") && config.botSrcRoot) {
     const rows = collectBotSrcTree(join(root, config.botSrcRoot));
     content = replaceMarkedSection(content, "src-tree", generateSrcTable(rows));
+  }
+  if (markers.includes("game-rules") && config.gameRulesMainJs) {
+    const mainPath = join(root, config.gameRulesMainJs);
+    const mainSource = readFileSync(mainPath, "utf8");
+    const spec = parseRobwGameSpec(mainSource);
+    const functionsDir = config.gameRulesFunctionsDir
+      ? join(root, config.gameRulesFunctionsDir)
+      : join(root, "behavior_packs/robw_behavior/functions/robw");
+    const mcFunctions = collectMcFunctions(functionsDir);
+    content = replaceMarkedSection(
+      content,
+      "game-rules",
+      generateGameRulesMarkdown(spec, mcFunctions),
+    );
   }
 
   const previous = readFileSync(docPath, "utf8");

@@ -2,6 +2,8 @@
   "repo": "hakonikomoru/return-of-boxworld",
   "rootLabel": "return-of-boxworld",
   "treeMaxDepth": 2,
-  "markers": ["meta", "directory-tree"],
-  "treeEntries": ["behavior_packs", "docs", "scripts"]
+  "markers": ["meta", "directory-tree", "game-rules"],
+  "treeEntries": ["behavior_packs", "docs", "scripts"],
+  "gameRulesMainJs": "behavior_packs/robw_behavior/scripts/main.js",
+  "gameRulesFunctionsDir": "behavior_packs/robw_behavior/functions/robw"
 }
