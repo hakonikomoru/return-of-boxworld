@@ -3,50 +3,56 @@
  * Minecraft Bedrock Edition Script API
  */
 
-import { world, system, ItemStack } from "@minecraft/server";
+import { world, system, ItemStack, WeatherType } from "@minecraft/server";
 
 console.warn("[ROBW] main.js loaded");
 
 // ---------------------------------------------------------------------------
-// 設定（ワールドに合わせて BOX_GATE を変更してください）
+// 設定（BOX_GATE は未起動時のフォールバック。通常は start したプレイヤー位置が中心）
 // ---------------------------------------------------------------------------
 
 const CONFIG = {
   /** ゲート開放時間（分） */
-  GATE_OPEN_MINUTES: 10,
+  GATE_OPEN_MINUTES: 5,
   /** 残り時間の定期通知間隔（秒） */
   TIME_NOTIFY_INTERVAL_SECONDS: 60,
   /** 帰還ボックス化: 骨を使える距離 */
   PROTECTION_RADIUS: 4,
-  /** ボックスゲート（招集・集合エリアの中心） */
+  /** ラウンド中心の半径（ハコイヌスポーン等の目安。未起動時のフォールバック座標も兼用） */
   BOX_GATE: {
     x: 0,
     y: 86,
     z: 0,
     radius: 3,
   },
-  /** 納品チェスト（未設置時のフォールバック座標。通常は起動時に自動配置） */
+  /** 納品チェスト（未設置時のフォールバック座標） */
   SUBMISSION_CHEST: {
     x: 0,
     y: 85,
     z: 0,
   },
-  /** 平坦なチェスト設置場所を探す半径（BOX_GATE 中心から） */
-  CHEST_FLAT_SEARCH_RADIUS: 24,
+  /** start 時に足元付近の既存チェスト類を撤去する半径 */
+  CHEST_CLEANUP_RADIUS: 3,
   /** 納品に使えるブロック */
   SUBMISSION_CHEST_BLOCK_TYPES: [
     "minecraft:chest",
     "minecraft:trapped_chest",
     "minecraft:barrel",
   ],
-  /** ゲート起動時に招集する高さ（ブロック内埋まり防止用オフセット） */
+  /** ゲート起動時に招集する高さ（未使用・互換用） */
   GATE_SUMMON_OFFSET_Y: 0,
   /** ゲート起動時に全員へ配る骨の数 */
-  START_GIVE_BONES: 16,
+  START_GIVE_BONES: 12,
+  /** ハコイヌを納品チェストに納品したとき、1 匹あたりもらえる骨の数 */
+  BONES_PER_HAKOINU_DELIVERY: 4,
   /** ゲート起動時にスポーンするハコイヌ（オオカミ）の数 */
-  START_SPAWN_HAKOINU: 10,
-  /** ゲート中心からハコイヌをスポーンする距離（ブロック） */
-  HAKOINU_SPAWN_DISTANCE: 6,
+  START_SPAWN_HAKOINU: 100,
+  /** ゲート起動時にランダムでスポーンする別種（ペナルティ動物）の数 */
+  START_SPAWN_PENALTY_ANIMALS: 50,
+  /** スポーン位置: 中心からの最小距離（ブロック） */
+  SPAWN_MIN_DISTANCE: 4,
+  /** スポーン位置: 中心からの最大距離（ブロック） */
+  SPAWN_MAX_DISTANCE: 28,
   /** 保護用アイテム（骨） */
   PROTECT_ITEM: "minecraft:bone",
   /** 帰還ボックスとして扱うアイテム（MVP はウサギの皮＝茶色の毛皮） */
@@ -91,6 +97,16 @@ const CONFIG = {
     "ROBW:reset": "reset",
     "ROBW:ranking": "ranking",
   },
+  /** 昼・晴天を固定する */
+  LOCK_DAYTIME: true,
+  /** 固定する時刻（ゲーム刻。6000 = 真昼） */
+  DAY_TIME_OF_DAY: 6000,
+  /** 晴天を維持する長さ（tick） */
+  WEATHER_CLEAR_DURATION_TICKS: 100000,
+  /** start 時のカウントダウン演出（3・2・1） */
+  START_COUNTDOWN_ENABLED: true,
+  /** カウントダウン各表示の間隔（tick。20 = 1秒） */
+  START_COUNTDOWN_STEP_TICKS: 20,
 };
 
 /** 目立つ残り時間通知（秒） */
@@ -102,12 +118,16 @@ const SUBMISSION_PROCESS_DELAYS = [5, 20, 40, 60, 100, 150];
 const GATE_OPEN_TICKS = CONFIG.GATE_OPEN_MINUTES * 60 * TICKS_PER_SECOND;
 const TIME_NOTIFY_INTERVAL_TICKS =
   CONFIG.TIME_NOTIFY_INTERVAL_SECONDS * TICKS_PER_SECOND;
+const DAYTIME_LOCK_INTERVAL_TICKS = 200;
+const LOCKED_DIMENSION_IDS = ["overworld", "nether", "the_end"];
 
 // ---------------------------------------------------------------------------
 // ゲーム状態
 // ---------------------------------------------------------------------------
 
-/** @type {"waiting" | "running" | "finished"} */
+/** @type {number | undefined} */
+let daylightLockLoopId = undefined;
+/** @type {"waiting" | "countdown" | "running" | "finished"} */
 let gameState = "waiting";
 let gameEndTick = 0;
 let nextTimeNotifyTick = 0;
@@ -124,6 +144,10 @@ let lastSubmissionTick = 0;
 let activeSubmissionChestPos = null;
 /** @type {{ dimension: import("@minecraft/server").Dimension, x: number, y: number, z: number, typeId: string } | null} */
 let placedChestRestore = null;
+/** @type {{ x: number, y: number, z: number, radius: number } | null} */
+let activeRoundCenter = null;
+/** カウントダウンキャンセル用（増やすと予約した start を無効化） */
+let startCountdownGeneration = 0;
 
 // ---------------------------------------------------------------------------
 // ログ
@@ -139,6 +163,229 @@ function logWarn(message) {
 
 function logError(message) {
   console.warn(`[ERROR] ${message}`);
+}
+
+// ---------------------------------------------------------------------------
+// 天候・時刻（昼固定）
+// ---------------------------------------------------------------------------
+
+function disableTimeAndWeatherCycles() {
+  try {
+    const rules = world.gameRules;
+    if (!rules) return;
+    if ("doDaylightCycle" in rules) rules.doDaylightCycle = false;
+    if ("doDayLightCycle" in rules) rules.doDayLightCycle = false;
+    if ("doWeatherCycle" in rules) rules.doWeatherCycle = false;
+  } catch (error) {
+    logWarn(`gameRules lock failed: ${error}`);
+  }
+}
+
+function applyDaytimeLockToDimension(dimension) {
+  const time = CONFIG.DAY_TIME_OF_DAY;
+  const weatherTicks = CONFIG.WEATHER_CLEAR_DURATION_TICKS;
+
+  if (typeof dimension.setTimeOfDay === "function") {
+    dimension.setTimeOfDay(time);
+  }
+
+  if (typeof dimension.setWeather === "function") {
+    dimension.setWeather(WeatherType.Clear, weatherTicks);
+  } else if (typeof dimension.runCommand === "function") {
+    const seconds = Math.max(1, Math.floor(weatherTicks / TICKS_PER_SECOND));
+    dimension.runCommand(`weather clear ${seconds}`);
+    dimension.runCommand("time set noon");
+  }
+}
+
+function applyDaytimeLock() {
+  if (!CONFIG.LOCK_DAYTIME) return;
+
+  disableTimeAndWeatherCycles();
+
+  try {
+    if (typeof world.setTimeOfDay === "function") {
+      world.setTimeOfDay(CONFIG.DAY_TIME_OF_DAY);
+    }
+  } catch (error) {
+    logWarn(`world.setTimeOfDay failed: ${error}`);
+  }
+
+  for (const dimId of LOCKED_DIMENSION_IDS) {
+    try {
+      applyDaytimeLockToDimension(world.getDimension(dimId));
+    } catch (error) {
+      logWarn(`daytime lock failed for ${dimId}: ${error}`);
+    }
+  }
+}
+
+function startDaytimeLockLoop() {
+  if (!CONFIG.LOCK_DAYTIME) return;
+  applyDaytimeLock();
+  if (daylightLockLoopId !== undefined) return;
+  daylightLockLoopId = system.runInterval(
+    applyDaytimeLock,
+    DAYTIME_LOCK_INTERVAL_TICKS
+  );
+  logInfo("daytime lock enabled (clear weather, fixed noon)");
+}
+
+// ---------------------------------------------------------------------------
+// ゲーム開始カウントダウン演出
+// ---------------------------------------------------------------------------
+
+const START_COUNTDOWN_SEQUENCE = [
+  {
+    title: "§6§lRETURN OF BOXWORLD",
+    subtitle: "§fゲート起動準備…",
+    actionBar: "§6§oReturn of BoxWorld",
+    sound: null,
+    pitch: 1,
+  },
+  {
+    title: "§e§l3",
+    subtitle: "§7まもなく開始",
+    actionBar: "§e§l▶ 3",
+    sound: "note.pling",
+    pitch: 0.75,
+  },
+  {
+    title: "§6§l2",
+    subtitle: "§7まもなく開始",
+    actionBar: "§6§l▶ 2",
+    sound: "note.pling",
+    pitch: 1,
+  },
+  {
+    title: "§c§l1",
+    subtitle: "§7まもなく開始",
+    actionBar: "§c§l▶ 1",
+    sound: "note.pling",
+    pitch: 1.25,
+  },
+  {
+    title: "§a§lSTART!",
+    subtitle: "§fハコイヌを帰還させよう！",
+    actionBar: "§a§lゲート開放！",
+    sound: "random.levelup",
+    pitch: 1,
+  },
+];
+
+function cancelStartCountdown() {
+  startCountdownGeneration++;
+  if (gameState === "countdown") {
+    gameState = "waiting";
+    activeRoundCenter = null;
+  }
+}
+
+function showCountdownPresentation(step) {
+  const titleOpts = {
+    fadeInDuration: 2,
+    stayDuration: Math.max(8, CONFIG.START_COUNTDOWN_STEP_TICKS - 4),
+    fadeOutDuration: 4,
+  };
+
+  for (const player of world.getPlayers()) {
+    if (!player?.isValid) continue;
+
+    try {
+      const display = player.onScreenDisplay;
+      if (display) {
+        try {
+          display.setTitle(step.title, titleOpts);
+        } catch {
+          display.setTitle(step.title);
+        }
+        if (step.subtitle) {
+          try {
+            display.setSubtitle(step.subtitle);
+          } catch {
+            // ignore
+          }
+        }
+        if (step.actionBar) {
+          display.setActionBar(step.actionBar);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    if (step.sound) {
+      try {
+        player.dimension.playSound(step.sound, player.location, {
+          volume: 1,
+          pitch: step.pitch ?? 1,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+function spawnCountdownBurst(dimension, center) {
+  if (!center) return;
+  const loc = { x: center.x + 0.5, y: center.y + 1, z: center.z + 0.5 };
+  const particles = [
+    "minecraft:totem_particle",
+    "minecraft:villager_happy",
+  ];
+  for (const id of particles) {
+    try {
+      dimension.spawnParticle(id, loc);
+    } catch {
+      // ignore
+    }
+  }
+  try {
+    dimension.playSound("random.explode", loc, { volume: 0.35, pitch: 1.2 });
+  } catch {
+    // ignore
+  }
+}
+
+function runStartCountdown(host, validation, onComplete) {
+  if (!CONFIG.START_COUNTDOWN_ENABLED) {
+    onComplete();
+    return;
+  }
+
+  const generation = ++startCountdownGeneration;
+  const stepTicks = CONFIG.START_COUNTDOWN_STEP_TICKS;
+  const center = validation.center;
+
+  gameState = "countdown";
+  broadcast(`§6${host.name}§fがゲートを起動します…`);
+
+  for (let i = 0; i < START_COUNTDOWN_SEQUENCE.length; i++) {
+    const step = START_COUNTDOWN_SEQUENCE[i];
+    system.runTimeout(() => {
+      if (generation !== startCountdownGeneration || gameState !== "countdown") {
+        return;
+      }
+      showCountdownPresentation(step);
+      if (i === START_COUNTDOWN_SEQUENCE.length - 1) {
+        spawnCountdownBurst(validation.dimension, center);
+      }
+      if (i >= 1 && i <= 3) {
+        broadcast(`§e§l  ${4 - i}  `);
+      } else if (i === START_COUNTDOWN_SEQUENCE.length - 1) {
+        broadcast("§a§l━━━━━ START! ━━━━━");
+      }
+    }, i * stepTicks);
+  }
+
+  const totalTicks = START_COUNTDOWN_SEQUENCE.length * stepTicks;
+  system.runTimeout(() => {
+    if (generation !== startCountdownGeneration || gameState !== "countdown") {
+      return;
+    }
+    onComplete();
+  }, totalTicks);
 }
 
 // ---------------------------------------------------------------------------
@@ -266,17 +513,92 @@ function giveReturnBox(player, amount = 1, kind = "hakoinu") {
 // ---------------------------------------------------------------------------
 
 /** @type {import("@minecraft/server").Entity[]} */
-let spawnedHakoinu = [];
+let spawnedRoundEntities = [];
 
-function clearSpawnedHakoinu() {
-  for (const entity of spawnedHakoinu) {
+function clearSpawnedRoundEntities() {
+  for (const entity of spawnedRoundEntities) {
     try {
       if (entity?.isValid) entity.remove();
     } catch {
       // 既に消えている場合は無視
     }
   }
-  spawnedHakoinu = [];
+  spawnedRoundEntities = [];
+}
+
+/** @deprecated 互換エイリアス */
+function clearSpawnedHakoinu() {
+  clearSpawnedRoundEntities();
+}
+
+function pickRandomPenaltyAnimalType() {
+  const types = CONFIG.PENALTY_ANIMAL_TYPES;
+  return types[Math.floor(Math.random() * types.length)];
+}
+
+function randomSpawnLocationNearGate(gate) {
+  const angle = Math.random() * Math.PI * 2;
+  const minD = CONFIG.SPAWN_MIN_DISTANCE;
+  const maxD = CONFIG.SPAWN_MAX_DISTANCE;
+  const dist = minD + Math.random() * (maxD - minD);
+  return {
+    x: gate.x + 0.5 + Math.cos(angle) * dist,
+    y: gate.y + CONFIG.GATE_SUMMON_OFFSET_Y,
+    z: gate.z + 0.5 + Math.sin(angle) * dist,
+  };
+}
+
+function trySpawnRoundEntity(dimension, entityType, location) {
+  try {
+    const entity = dimension.spawnEntity(entityType, location);
+    spawnedRoundEntities.push(entity);
+    return true;
+  } catch (error) {
+    logWarn(`spawn ${entityType} failed: ${error}`);
+    return false;
+  }
+}
+
+function spawnRoundAnimalsAtGate(dimension) {
+  const gate = getActiveBoxGate();
+  const hakoinuType = CONFIG.HAKOINU_ENTITY_TYPES[0];
+  let hakoinuSpawned = 0;
+  let penaltySpawned = 0;
+
+  for (let i = 0; i < CONFIG.START_SPAWN_HAKOINU; i++) {
+    if (
+      trySpawnRoundEntity(
+        dimension,
+        hakoinuType,
+        randomSpawnLocationNearGate(gate)
+      )
+    ) {
+      hakoinuSpawned++;
+    }
+  }
+
+  for (let i = 0; i < CONFIG.START_SPAWN_PENALTY_ANIMALS; i++) {
+    const entityType = pickRandomPenaltyAnimalType();
+    if (
+      trySpawnRoundEntity(
+        dimension,
+        entityType,
+        randomSpawnLocationNearGate(gate)
+      )
+    ) {
+      penaltySpawned++;
+    }
+  }
+
+  logInfo(
+    `spawned hakoinu=${hakoinuSpawned}/${CONFIG.START_SPAWN_HAKOINU} penalty=${penaltySpawned}/${CONFIG.START_SPAWN_PENALTY_ANIMALS} near round center`
+  );
+  return { hakoinuSpawned, penaltySpawned };
+}
+
+/** @deprecated 互換エイリアス */
+function spawnHakoinuAtGate(dimension) {
+  spawnRoundAnimalsAtGate(dimension);
 }
 
 function removeItemTypeFromInventory(player, typeId) {
@@ -306,27 +628,113 @@ function giveStartKit(player) {
   }
 }
 
-function spawnHakoinuAtGate(dimension) {
-  const gate = CONFIG.BOX_GATE;
-  const count = CONFIG.START_SPAWN_HAKOINU;
-  const entityType = CONFIG.HAKOINU_ENTITY_TYPES[0];
-  const baseY = gate.y + CONFIG.GATE_SUMMON_OFFSET_Y;
+function giveBones(player, amount) {
+  if (amount <= 0) return 0;
 
-  for (let i = 0; i < count; i++) {
-    const angle = (2 * Math.PI * i) / Math.max(count, 1);
-    const dist = CONFIG.HAKOINU_SPAWN_DISTANCE;
-    const x = gate.x + 0.5 + Math.cos(angle) * dist;
-    const z = gate.z + 0.5 + Math.sin(angle) * dist;
+  const container = player.getComponent("inventory")?.container;
+  let remaining = amount;
 
-    try {
-      const entity = dimension.spawnEntity(entityType, { x, y: baseY, z });
-      spawnedHakoinu.push(entity);
-    } catch (error) {
-      logWarn(`spawn hakoinu failed (${i + 1}/${count}): ${error}`);
+  while (remaining > 0) {
+    const batch = Math.min(remaining, 64);
+    const stack = new ItemStack(CONFIG.PROTECT_ITEM, batch);
+    remaining -= batch;
+
+    if (!container) {
+      player.dimension.spawnItem(stack, player.location);
+      continue;
+    }
+
+    const leftover = container.addItem(stack);
+    if (leftover) {
+      player.dimension.spawnItem(leftover, player.location);
     }
   }
 
-  logInfo(`spawned ${spawnedHakoinu.length} hakoinu near box gate`);
+  return amount;
+}
+
+function getActiveBoxGate() {
+  return activeRoundCenter ?? CONFIG.BOX_GATE;
+}
+
+function resolveStartHost(initiator) {
+  if (initiator?.isValid) return initiator;
+  const players = world.getPlayers();
+  return players.length > 0 ? players[0] : null;
+}
+
+function isPlayerFlying(player) {
+  if (player.isFlying === true) return true;
+  if (player.isGliding === true) return true;
+  return false;
+}
+
+/** @returns {{ ok: true, center: { x: number, y: number, z: number, radius: number }, chestSpot: { x: number, y: number, z: number, footY: number }, dimension: import("@minecraft/server").Dimension } | { ok: false, message: string, reason: string }} */
+function validateRoundStartAtPlayer(player) {
+  const loc = player.location;
+  const dimension = player.dimension;
+  const bx = Math.floor(loc.x);
+  const bz = Math.floor(loc.z);
+
+  if (isPlayerFlying(player)) {
+    return {
+      ok: false,
+      message: "§c飛行中はゲートを起動できません。地面に立って start してください。",
+      reason: "flying",
+    };
+  }
+
+  if (typeof player.isOnGround === "boolean" && !player.isOnGround) {
+    return {
+      ok: false,
+      message: "§c地面に立った状態で start してください。",
+      reason: "not_on_ground",
+    };
+  }
+
+  const belowY = Math.floor(loc.y - 0.01);
+  const ground = dimension.getBlock({ x: bx, y: belowY, z: bz });
+  if (!isSolidGroundBlock(ground)) {
+    return {
+      ok: false,
+      message: "§c足元に地面がありません。地面の上で start してください。",
+      reason: "no_ground",
+    };
+  }
+
+  const chestY = belowY + 1;
+  const heightAboveGround = loc.y - chestY;
+  if (heightAboveGround < -0.2 || heightAboveGround > 1.25) {
+    return {
+      ok: false,
+      message:
+        "§c地面の上で start してください。（空中や足場の下では開始できません）",
+      reason: "off_ground",
+    };
+  }
+
+  const atFeet = dimension.getBlock({ x: bx, y: chestY, z: bz });
+  if (!atFeet?.isAir) {
+    return {
+      ok: false,
+      message: "§c足元にブロックがあるためチェストを設置できません。",
+      reason: "blocked_feet",
+    };
+  }
+
+  const center = {
+    x: bx,
+    y: chestY,
+    z: bz,
+    radius: CONFIG.BOX_GATE.radius,
+  };
+
+  return {
+    ok: true,
+    center,
+    chestSpot: { x: bx, y: chestY, z: bz, footY: belowY },
+    dimension,
+  };
 }
 
 function getActiveSubmissionChestPos() {
@@ -338,75 +746,6 @@ function isSolidGroundBlock(block) {
   if (block.isAir) return false;
   if (block.isLiquid) return false;
   return true;
-}
-
-function findSurfaceFootY(dimension, x, z, minY, maxY) {
-  for (let y = maxY; y >= minY; y--) {
-    const ground = dimension.getBlock({ x, y, z });
-    const above = dimension.getBlock({ x, y: y + 1, z });
-    if (isSolidGroundBlock(ground) && above?.isAir) {
-      return y;
-    }
-  }
-  return null;
-}
-
-function evaluateFlatChestPlatform(dimension, centerX, centerZ, refY) {
-  const minY = refY - 10;
-  const maxY = refY + 2;
-  const centerFootY = findSurfaceFootY(dimension, centerX, centerZ, minY, maxY);
-  if (centerFootY === null) return null;
-
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dz = -1; dz <= 1; dz++) {
-      const x = centerX + dx;
-      const z = centerZ + dz;
-      const footY = findSurfaceFootY(dimension, x, z, minY, maxY);
-      if (footY === null || footY !== centerFootY) return null;
-
-      const above = dimension.getBlock({ x, y: footY + 1, z });
-      if (!above?.isAir) return null;
-    }
-  }
-
-  const chestY = centerFootY + 1;
-  return {
-    x: centerX,
-    y: chestY,
-    z: centerZ,
-    footY: centerFootY,
-    score: 9 - Math.abs(centerFootY - (refY - 1)) * 3,
-  };
-}
-
-function findFlatChestSpot(dimension) {
-  const gate = CONFIG.BOX_GATE;
-  const refY = gate.y;
-  const radius = CONFIG.CHEST_FLAT_SEARCH_RADIUS;
-  const baseX = Math.floor(gate.x);
-  const baseZ = Math.floor(gate.z);
-
-  let best = null;
-
-  for (let dx = -radius; dx <= radius; dx++) {
-    for (let dz = -radius; dz <= radius; dz++) {
-      const platform = evaluateFlatChestPlatform(
-        dimension,
-        baseX + dx,
-        baseZ + dz,
-        refY
-      );
-      if (!platform) continue;
-
-      const dist = Math.hypot(dx, dz);
-      const score = platform.score - dist * 0.2;
-      if (!best || score > best.score) {
-        best = { ...platform, score };
-      }
-    }
-  }
-
-  return best;
 }
 
 function setBlockTypeAt(dimension, location, typeId) {
@@ -459,7 +798,7 @@ function removeExtraChestsInArea(dimension, centerX, centerZ, radius, minY, maxY
   }
 
   if (removed > 0) {
-    logInfo(`removed ${removed} chest(s) near box gate before placement`);
+    logInfo(`removed ${removed} extra chest(s) near submission spot`);
   }
   return removed;
 }
@@ -492,30 +831,27 @@ function removePlacedSubmissionChest(dimension) {
   activeSubmissionChestPos = null;
 }
 
-function placeSubmissionChest(dimension) {
+function placeSubmissionChest(dimension, spot) {
   placedChestRestore = null;
   activeSubmissionChestPos = null;
 
-  const gate = CONFIG.BOX_GATE;
   removeExtraChestsInArea(
     dimension,
-    gate.x,
-    gate.z,
-    CONFIG.CHEST_FLAT_SEARCH_RADIUS,
-    gate.y - 10,
-    gate.y + 3
+    spot.x,
+    spot.z,
+    CONFIG.CHEST_CLEANUP_RADIUS,
+    spot.footY - 1,
+    spot.footY + 2
   );
 
-  const spot = findFlatChestSpot(dimension);
-  if (!spot) {
-    logWarn("no flat location found for submission chest");
-    broadcast(
-      "§c平坦な場所が見つからず、納品チェストを設置できませんでした。"
+  const before = dimension.getBlock({ x: spot.x, y: spot.y, z: spot.z });
+  if (!before?.isAir) {
+    logWarn(
+      `submission chest blocked at (${spot.x}, ${spot.y}, ${spot.z}) type=${before?.typeId}`
     );
     return false;
   }
 
-  const before = dimension.getBlock({ x: spot.x, y: spot.y, z: spot.z });
   placedChestRestore = {
     dimension,
     x: spot.x,
@@ -528,7 +864,7 @@ function placeSubmissionChest(dimension) {
   activeSubmissionChestPos = { x: spot.x, y: spot.y, z: spot.z };
 
   broadcast(
-    `§b納品チェストを平坦な場所に設置しました: (${spot.x}, ${spot.y}, ${spot.z})`
+    `§b納品チェストを足元に設置しました: (${spot.x}, ${spot.y}, ${spot.z})`
   );
   logInfo(
     `submission chest placed at (${spot.x}, ${spot.y}, ${spot.z}) footY=${spot.footY}`
@@ -536,23 +872,24 @@ function placeSubmissionChest(dimension) {
   return true;
 }
 
-function prepareRoundStart() {
-  const players = world.getPlayers();
-  if (players.length === 0) return;
+/** @returns {boolean} */
+function prepareRoundStart(validation) {
+  const dimension = validation.dimension;
 
-  const dimension = players[0].dimension;
+  clearSpawnedRoundEntities();
+  if (!placeSubmissionChest(dimension, validation.chestSpot)) {
+    return false;
+  }
+  const spawned = spawnRoundAnimalsAtGate(dimension);
 
-  clearSpawnedHakoinu();
-  placeSubmissionChest(dimension);
-  spawnHakoinuAtGate(dimension);
-
-  for (const player of players) {
+  for (const player of world.getPlayers()) {
     giveStartKit(player);
   }
 
   broadcast(
-    `§f骨を §7×${CONFIG.START_GIVE_BONES} §fにリセット、§fハコイヌ §7${CONFIG.START_SPAWN_HAKOINU} 匹を出現させました！`
+    `§f骨を §7×${CONFIG.START_GIVE_BONES} §fにリセット、§fハコイヌ §7${spawned.hakoinuSpawned} 匹§7・§c別種 §7${spawned.penaltySpawned} 匹§fを出現させました！`
   );
+  return true;
 }
 
 function isHakoinuEntity(entity) {
@@ -762,10 +1099,20 @@ function processSubmissionChest(player) {
     returned.hakoinu * CONFIG.POINTS_PER_BOX +
     returned.wrong * CONFIG.POINTS_WRONG_ANIMAL;
   const total = addReturnPoints(player, points);
+  const bonesEarned =
+    returned.hakoinu * CONFIG.BONES_PER_HAKOINU_DELIVERY;
+  if (bonesEarned > 0) {
+    giveBones(player, bonesEarned);
+  }
   announceDelivery(player, returned, points, total);
   player.sendMessage(
     `§7納品した毛皮 ${returned.hakoinu + returned.wrong} 枚を消費しました。`
   );
+  if (bonesEarned > 0) {
+    player.sendMessage(
+      `§a納品ボーナス: 骨 ×${bonesEarned} §7（ハコイヌ 1 匹あたり ×${CONFIG.BONES_PER_HAKOINU_DELIVERY}）`
+    );
+  }
   logInfo(
     `${player.name} submitted hakoinu=${returned.hakoinu} wrong=${returned.wrong} (${points} pts)`
   );
@@ -871,6 +1218,7 @@ function finishGame() {
   gameState = "finished";
   stopGameLoops();
   clearSpawnedHakoinu();
+  activeRoundCenter = null;
 
   const players = world.getPlayers();
   if (players.length > 0) {
@@ -882,51 +1230,7 @@ function finishGame() {
   logInfo("gate closed, game finished");
 }
 
-function teleportPlayersToBoxGate() {
-  const gate = CONFIG.BOX_GATE;
-  const chest = getActiveSubmissionChestPos();
-  const location = {
-    x: (chest?.x ?? gate.x) + 0.5,
-    y: (chest ? chest.y + 1 : gate.y) + CONFIG.GATE_SUMMON_OFFSET_Y,
-    z: (chest?.z ?? gate.z) + 0.5,
-  };
-
-  for (const player of world.getPlayers()) {
-    try {
-      player.teleport(location, {
-        dimension: player.dimension,
-        rotation: player.getRotation(),
-      });
-    } catch (error) {
-      logWarn(`teleport to gathering point failed for ${player.name}: ${error}`);
-    }
-  }
-
-  if (chest) {
-    broadcast(
-      `§b全員を納品チェスト付近 (${chest.x}, ${chest.y}, ${chest.z}) に招集しました！`
-    );
-  } else {
-    broadcast(
-      `§b全員をボックスゲート (${gate.x}, ${gate.y}, ${gate.z}) に招集しました！`
-    );
-  }
-  logInfo(`teleported ${world.getPlayers().length} player(s) to gathering point`);
-}
-
-function startGame(initiator) {
-  if (gameState === "running") {
-    const msg = `§cすでにゲート開放中です。${CONFIG.CHAT_PREFIX} stop で閉鎖できます。`;
-    broadcast(msg);
-    initiator?.sendMessage(msg);
-    logWarn("Start command ignored because game is already running");
-    return;
-  }
-
-  stopGameLoops();
-  resetAllScores();
-  resetTimerState();
-
+function beginGameRound(host, validation) {
   gameState = "running";
   gameEndTick = system.currentTick + GATE_OPEN_TICKS;
   nextTimeNotifyTick = system.currentTick + TIME_NOTIFY_INTERVAL_TICKS;
@@ -935,20 +1239,24 @@ function startGame(initiator) {
     "§aゲート起動！現世に迷い込んだハコイヌたちを、ボックスワールドへ帰してあげよう！"
   );
   broadcast(
-    `§fゲート開放時間: ${CONFIG.GATE_OPEN_MINUTES}分 | 骨で捕獲 → 納品チェストへ`
+    `§fゲート開放時間: ${CONFIG.GATE_OPEN_MINUTES}分 | 骨で捕獲 → 足元の納品チェストへ`
   );
   broadcast(
     `§7ハコイヌ以外を納品すると §c${CONFIG.POINTS_WRONG_ANIMAL}pt§7 ペナルティ`
   );
   broadcast(
-    `§7納品チェスト: 起動時に Y${CONFIG.BOX_GATE.y} 付近へ **1つだけ** 自動設置（周囲の既存チェストは撤去）`
-  );
-  broadcast(
-    `§7集合エリア: (${CONFIG.BOX_GATE.x}, ${CONFIG.BOX_GATE.y}, ${CONFIG.BOX_GATE.z}) 半径${CONFIG.BOX_GATE.radius}`
+    `§7開始地点: ${host.name} の位置 (${validation.center.x}, ${validation.center.y}, ${validation.center.z})`
   );
 
-  prepareRoundStart();
-  teleportPlayersToBoxGate();
+  if (!prepareRoundStart(validation)) {
+    gameState = "waiting";
+    activeRoundCenter = null;
+    activeSubmissionChestPos = null;
+    placedChestRestore = null;
+    host.sendMessage("§c納品チェストを設置できませんでした。地面の上で start してください。");
+    logWarn("start rolled back: chest placement failed");
+    return;
+  }
 
   gameLoopId = system.runInterval(tickGameTimer, TICKS_PER_SECOND);
   submissionLoopId = system.runInterval(() => {
@@ -962,11 +1270,58 @@ function startGame(initiator) {
     processSubmissionChest(lastSubmissionPlayer);
   }, TICKS_PER_SECOND);
 
-  initiator?.sendMessage("§a[ROBW] ゲートを起動しました！");
-  logInfo("Game started");
+  host.sendMessage("§a[ROBW] ゲートを起動しました！");
+  logInfo(
+    `Game started at (${validation.center.x}, ${validation.center.y}, ${validation.center.z}) by ${host.name}`
+  );
+}
+
+function startGame(initiator) {
+  if (gameState === "running") {
+    const msg = `§cすでにゲート開放中です。${CONFIG.CHAT_PREFIX} stop で閉鎖できます。`;
+    broadcast(msg);
+    initiator?.sendMessage(msg);
+    logWarn("Start command ignored because game is already running");
+    return;
+  }
+
+  if (gameState === "countdown") {
+    const msg = "§cカウントダウン中です。しばらくお待ちください。";
+    initiator?.sendMessage(msg);
+    return;
+  }
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないためゲートを起動できません。");
+    return;
+  }
+
+  const validation = validateRoundStartAtPlayer(host);
+  if (!validation.ok) {
+    host.sendMessage(validation.message);
+    logWarn(`start blocked for ${host.name}: ${validation.reason}`);
+    return;
+  }
+
+  stopGameLoops();
+  resetAllScores();
+  resetTimerState();
+  activeRoundCenter = validation.center;
+  applyDaytimeLock();
+
+  runStartCountdown(host, validation, () => {
+    beginGameRound(host, validation);
+  });
 }
 
 function stopGame() {
+  if (gameState === "countdown") {
+    cancelStartCountdown();
+    broadcast("§cゲート起動をキャンセルしました。");
+    logInfo("Start countdown cancelled");
+    return;
+  }
   if (gameState !== "running") {
     broadcast("§cゲートは開放されていません。");
     return;
@@ -976,11 +1331,13 @@ function stopGame() {
 }
 
 function resetGame() {
+  cancelStartCountdown();
   stopGameLoops();
   gameState = "waiting";
   resetTimerState();
   resetAllScores();
   clearSpawnedHakoinu();
+  activeRoundCenter = null;
   const players = world.getPlayers();
   if (players.length > 0) {
     removePlacedSubmissionChest(players[0].dimension);
@@ -1304,8 +1661,8 @@ function registerGameEvents() {
 function getRobwHelpLines() {
   const lines = [
     "§a[ROBW] 準備OK",
-    "§7① 時計 §fROBW:start§7 を空中右クリック",
-    "§7② 骨で捕獲 → 自動設置の納品チェストに入れる",
+    "§7① 地面に立って §fROBW:start§7（空中右クリック）→ 足元にチェスト",
+    "§7② 骨で捕獲 → 納品チェストに入れる",
     "§7③ §f/function robw/start §7（チートON）",
     "§7④ §f/scriptevent robw:start",
   ];
@@ -1326,6 +1683,7 @@ function onAddonReady() {
   try {
     getObjective();
     registerGameEvents();
+    startDaytimeLockLoop();
     logInfo("Return of BoxWorld addon loaded (state: waiting)");
     logInfo(
       `box gate: (${CONFIG.BOX_GATE.x}, ${CONFIG.BOX_GATE.y}, ${CONFIG.BOX_GATE.z}) r=${CONFIG.BOX_GATE.radius}`
