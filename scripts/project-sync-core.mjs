@@ -286,6 +286,7 @@ export function parseRobwGameSpec(mainJsSource) {
     chestCleanupRadius: parseConfigNumber(block, "CHEST_CLEANUP_RADIUS"),
     protectItem: parseConfigString(block, "PROTECT_ITEM"),
     returnBoxItem: parseConfigString(block, "RETURN_BOX_ITEM"),
+    returnBoxDisplayName: parseConfigString(block, "RETURN_BOX_DISPLAY_NAME"),
     returnBoxName: parseConfigString(block, "RETURN_BOX_NAME"),
     wrongReturnBoxName: parseConfigString(block, "WRONG_RETURN_BOX_NAME"),
     hakoinuEntityTypes: parseConfigStringArray(block, "HAKOINU_ENTITY_TYPES"),
@@ -338,8 +339,7 @@ export function generateGameRulesMarkdown(spec, mcFunctions = []) {
     "| ハコイヌ | " +
       spec.hakoinuEntityTypes.map(entityLabel).join("、") +
       " |",
-    `| 捕獲アイテム（ハコイヌ） | ${spec.returnBoxItem}（名前: ${spec.returnBoxName}） |`,
-    `| 捕獲アイテム（別種） | 同 ${spec.returnBoxItem}（名前: ${spec.wrongReturnBoxName}） |`,
+    `| 捕獲アイテム | ${spec.returnBoxItem}（表示名: ${spec.returnBoxDisplayName ?? spec.returnBoxName}・正誤は見た目では区別不可） |`,
     "| 納品チェスト | start したプレイヤーの足元に 1 つ設置 |",
     "| ラウンド中心 | start したプレイヤーの立ち位置（ハコイヌ出現の中心） |",
     `| 帰還ポイント | スコアボード \`${spec.scoreObjective}\` |`,
@@ -360,7 +360,7 @@ export function generateGameRulesMarkdown(spec, mcFunctions = []) {
     "",
     "1. **地面に立って** start（起動者の位置がラウンド中心）",
     `2. **${spec.protectItem}** を持ち、**${spec.protectionRadius} ブロック以内**の動物を **空中で右クリック**（捕獲）`,
-    `3. ハコイヌ → **${spec.returnBoxName}** / 他の動物 → **${spec.wrongReturnBoxName}**（${spec.returnBoxItem}）`,
+    `3. 骨で捕獲 → どちらも **${spec.returnBoxDisplayName ?? spec.returnBoxName}**（同じ見た目。正解は納品時に +pt / 別種は -pt）`,
     `4. 捕獲アイテムを **自動設置の納品チェスト（1つ）** に入れる → 得点加算のあと **毛皮はチェストから消える**`,
     "5. 時間切れまたは stop で閉鎖 → ランキング",
     "",
@@ -409,6 +409,7 @@ export function generateGameRulesMarkdown(spec, mcFunctions = []) {
     "- waiting … 待機",
     "- countdown … 起動カウントダウン中",
     "- running … ゲート開放中（骨での保護・納品のみ有効）",
+    "- closing … 閉鎖カウントダウン中",
     "- finished … 閉鎖済み（ランキング表示後）",
   ];
   return lines.join("\n");
