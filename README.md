@@ -163,16 +163,56 @@ PowerShell で `npm` が拒否される場合は `npm.cmd` または `node scrip
 
 ### コンテンツログ（開発の味方）
 
-1. マイクラ: **設定 → クリエイター** → **コンテンツログファイルを有効にする** = ON  
-2. `node scripts/diagnose-bedrock-log.mjs`  
-3. `node scripts/tail-bedrock-log.mjs --mirror --robw`  
-4. Cursor で `logs/bedrock-content.log` を開く  
+スクリプトの `[ROBW]` / `[INFO]` / `[ERROR]` や、ゲーム内チャットのミラー（`[ゲーム内]`）を Cursor から追うためのコマンドです。
 
-| npm スクリプト | 内容 |
-|----------------|------|
-| `diagnose:bedrock-log` | ログパス診断 |
-| `tail:bedrock-log:mirror` | ファイル → `logs/bedrock-content.log` にミラー |
-| `tail:bedrock-log:robw` | ROBW 行だけ表示 |
+#### 初回設定（マイクラ）
+
+| 設定 | 場所 | 推奨 |
+|------|------|------|
+| **コンテンツログファイルを有効にする** | 設定 → クリエイター | **ON**（tail の前提） |
+| コンテンツログ GUI | 同上 | ON |
+| GUI ログレベル | 同上 | **情報** または **詳細** |
+
+変更後は **ホームに一度戻ってから**ワールドへ入る。
+
+#### おすすめ手順（Cursor）
+
+1. 診断 … ログファイルの有無とパスを確認  
+   `node scripts/diagnose-bedrock-log.mjs`
+2. tail を起動（**別ターミナルで放置**）  
+   `node scripts/tail-bedrock-log.mjs --mirror --robw`
+3. エディタで **`logs/bedrock-content.log`** を開く … 追記がリアルタイムで見える
+
+#### ログを見るコマンド一覧
+
+| コマンド（`node scripts/...`） | npm スクリプト | 内容 |
+|-------------------------------|----------------|------|
+| `diagnose-bedrock-log.mjs` | `npm run diagnose:bedrock-log` | ログパスの診断 |
+| `tail-bedrock-log.mjs` | `npm run tail:bedrock-log` | コンソールに tail のみ |
+| `tail-bedrock-log.mjs --mirror` | `npm run tail:bedrock-log:mirror` | `ContentLog*.txt` を監視し **`logs/bedrock-content.log` にミラー** |
+| `tail-bedrock-log.mjs --mirror --robw` | （上記 + `--robw`） | ミラーしつつ **ROBW / Scripting 行だけ** コンソール表示 |
+| `tail-bedrock-log.mjs --robw` | `npm run tail:bedrock-log:robw` | ROBW 行だけコンソール表示 |
+| `tail-bedrock-log.mjs --mirror --clipboard` | `npm run tail:bedrock-log:gui` | ミラー + **ゲーム内 Ctrl+H → 全コピー** をクリップボードから取り込み |
+
+PowerShell で `npm` が拒否される場合は **`node scripts/...`** をそのまま使う（`npm.cmd run tail:bedrock-log:mirror` でも可）。
+
+Cursor タスク: **Ctrl+Shift+P** → **タスクの実行** → **Bedrock: tail content log**（または **ROBW only**）
+
+#### ゲーム内ログをエディタに取り込む
+
+ファイル tail で拾えない行は、ゲーム内 **Ctrl+H**（コンテンツログ履歴）→ **全コピー**。  
+`--mirror` 実行中ならクリップボード経由で `logs/bedrock-content.log` に `[gui]` 行として追記されます。
+
+#### ログの読み方（例）
+
+| ログ | 意味 |
+|------|------|
+| `[ROBW] main.js loaded` | スクリプト読み込み OK |
+| `[ROBW] 準備OK` | アドオン初期化 OK |
+| `[INFO] [ゲーム内] ...` | ゲーム内に表示した文言のミラー |
+| `[ERROR] ...` | 要修正。直後のスタックを確認 |
+
+詳細は **[docs/bedrock-dev-notes.md §8](docs/bedrock-dev-notes.md)** を参照。
 
 ---
 
