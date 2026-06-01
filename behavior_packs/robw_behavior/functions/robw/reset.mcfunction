@@ -1,1 +1,1 @@
-scriptevent robw:reset
+scriptevent robw:reset run

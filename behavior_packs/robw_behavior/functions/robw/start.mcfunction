@@ -1,1 +1,1 @@
-scriptevent robw:start
+scriptevent robw:start run

@@ -1,24 +1,29 @@
 {
   "format_version": 2,
   "header": {
-    "name": "リターン・オブ・ボックスワールド",
-    "description": "迷子のハコイヌを帰還ボックスに保護し、ボックスゲートからボックスワールドへ帰すリスナー参加型ミニゲーム（Behavior Pack）",
+    "name": "Return of BoxWorld",
+    "description": "現世に迷い込んだボックスワールドの犬たちを、帰還ボックスで保護して元の世界へ帰すリスナー参加型ミニゲーム。",
     "uuid": "a3f8c2e1-4b7d-4a9e-8f12-6d0e5c4b3a21",
-    "version": [0, 1, 0],
+    "version": [0, 1, 2],
     "min_engine_version": [1, 21, 0]
+  },
+  "metadata": {
+    "authors": [
+      "komolabo - こもらぼ -"
+    ]
   },
   "modules": [
     {
       "type": "data",
       "uuid": "b4e9d3f2-5c8e-4baf-9a23-7e1f6d5c4b32",
-      "version": [0, 1, 0]
+      "version": [0, 1, 2]
     },
     {
       "type": "script",
       "language": "javascript",
       "uuid": "c5fad4a3-6d9f-4cb0-ab34-8f2a7e6d5c43",
       "entry": "scripts/main.js",
-      "version": [0, 1, 0]
+      "version": [0, 1, 2]
     }
   ],
   "dependencies": [
@@ -28,7 +33,7 @@
     },
     {
       "module_name": "@minecraft/server-ui",
-      "version": "1.3.0"
+      "version": "1.2.0"
     }
   ]
 }

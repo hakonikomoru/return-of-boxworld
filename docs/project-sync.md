@@ -32,6 +32,7 @@ return-of-boxworld/
 ├── behavior_packs/
 │   └── robw_behavior/
 │       ├── functions/
+│       ├── items/
 │       ├── manifest.json
 │       └── scripts/
 ├── docs/
@@ -39,8 +40,15 @@ return-of-boxworld/
 │   ├── config-reference.md
 │   └── project-sync.md
 ├── scripts/
+│   ├── diagnose-bedrock-log.mjs
+│   ├── install-bedrock-pack.mjs
+│   ├── install-bedrock-pack.ps1
 │   ├── project-sync-core.mjs
-│   └── sync-project-docs.mjs
+│   ├── sync-bedrock-world-pack.mjs
+│   ├── sync-bedrock-world-pack.ps1
+│   ├── sync-project-docs.mjs
+│   ├── tail-bedrock-log.mjs
+│   └── verify-bedrock-pack.mjs
 ```
 <!-- sync:auto:directory-tree:end -->
 
@@ -72,7 +80,7 @@ return-of-boxworld/
 - **骨 ×12** を全員に配布（所持分はいったん消してからセット）
 - ハコイヌを納品チェストに入れると **骨 ×4 / 匹** を追加（別種納品では増えない）
 - **ハコイヌ 72 匹** と **別種 28 匹**（ランダム種）をラウンド中心 **10〜56 ブロック** にランダム配置
-- **納品チェスト**を起動者の **足元** に **1 つだけ** 設置（半径 3 内の既存チェスト類は撤去）
+- **納品チェスト**を起動者の **足元** に **1 つだけ** 設置（半径 6 内の既存チェスト類は撤去）
 - 終了・リセット時にスクリプトが出した動物と納品チェストは片付けられる
 
 ### プレイの流れ
@@ -133,6 +141,9 @@ return-of-boxworld/
 | 時計（minecraft:clock） | 名前 `ROBW:stop` を空中で右クリック | → `stop` |
 | 時計（minecraft:clock） | 名前 `ROBW:reset` を空中で右クリック | → `reset` |
 | 時計（minecraft:clock） | 名前 `ROBW:ranking` を空中で右クリック | → `ranking` |
+| 関数 | `/function robw/give_wand` | チート ON |
+| 関数 | `/function robw/menu` | チート ON |
+| 関数 | `/function robw/ping` | チート ON |
 | 関数 | `/function robw/ranking` | チート ON |
 | 関数 | `/function robw/reset` | チート ON |
 | 関数 | `/function robw/start` | チート ON |

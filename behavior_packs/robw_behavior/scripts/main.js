@@ -9,9 +9,9 @@ import {
   ItemStack,
   WeatherType,
   DisplaySlotId,
-  ScoreboardIdentityType,
 } from "@minecraft/server";
-import { ActionFormData } from "@minecraft/server-ui";
+
+import "./menu-ui.js";
 
 console.warn("[ROBW] main.js loaded");
 
@@ -42,8 +42,8 @@ const CONFIG = {
     y: 85,
     z: 0,
   },
-  /** start 時に足元付近の既存チェスト類を撤去する半径（ブロック） */
-  CHEST_CLEANUP_RADIUS: 3,
+  /** start 時に、開始位置付近の既存チェスト類を撤去する半径（ブロック） */
+  CHEST_CLEANUP_RADIUS: 6,
   /** 撤去対象とする収納ブロック（通常は変更不要） */
   SUBMISSION_CHEST_BLOCK_TYPES: [
     "minecraft:chest",
@@ -103,8 +103,10 @@ const CONFIG = {
   SCORE_OBJECTIVE: "return_point",
   /** チャットコマンドの接頭辞（例: !robw start） */
   CHAT_PREFIX: "!robw",
-  /** コマンド代わりの時計アイテム ID */
+  /** 操作メニュー用（必ず配布するバニラ時計 + 名前タグ） */
   WAND_ITEM: "minecraft:clock",
+  /** カスタム操作アイテム（登録できれば追加配布） */
+  WAND_ITEM_CUSTOM: "robw:control",
   /** 配布する時計の名前（右クリックで操作メニュー） */
   WAND_MENU_NAME: "ROBW:menu",
   WAND_NAMES: {
@@ -181,6 +183,15 @@ let hudLoopId = undefined;
 let timerHudRemainingName = null;
 /** @type {string | null} */
 let timerHudLimitName = null;
+/** @type {string | null} */
+let timerHudChestName = null;
+/** @type {Map<string, string>} */
+const timerHudPlayerPointNames = new Map();
+let timerHudActive = false;
+/** @type {number | undefined} */
+let timerHudWatchdogId = undefined;
+/** セッションホスト（先に入ったプレイヤー。退出時は次の参加者へ） @type {string | null} */
+let sessionHostPlayerId = null;
 
 // ---------------------------------------------------------------------------
 // ログ
@@ -196,6 +207,30 @@ function logWarn(message) {
 
 function logError(message) {
   console.warn(`[ERROR] ${message}`);
+}
+
+/** ゲーム内表示用の § カラーコードを除去（コンテンツログ用） */
+function stripMcFormatting(text) {
+  return String(text ?? "").replace(/§[0-9a-fklmnor]/gi, "");
+}
+
+/**
+ * プレイヤー向けチャット。ゲーム内表示と同じ文言をコンテンツログにも出す。
+ */
+function robwPlayerMessage(player, message) {
+  const text = String(message ?? "");
+  const who = player?.name ?? "?";
+  logInfo(`[ゲーム内] ${who}: ${stripMcFormatting(text)}`);
+  if (player && typeof player.sendMessage === "function") {
+    player.sendMessage(message);
+  }
+}
+
+/** 全員向けチャット（コンテンツログにも出す） */
+function robwBroadcast(message) {
+  const text = String(message ?? "");
+  logInfo(`[ゲーム内] 全員: ${stripMcFormatting(text)}`);
+  world.sendMessage(message);
 }
 
 // ---------------------------------------------------------------------------
@@ -543,6 +578,7 @@ function finalizeGameAfterCeremony() {
 
   broadcast("§6ゲート閉鎖！ハコイヌたちの帰還結果を発表します！");
   showRanking();
+  resetAllPlayersToLobbyInventory();
   logInfo("gate closed, game finished");
 }
 
@@ -583,7 +619,7 @@ function requestGameEnd(wasManualStop = false) {
 // ---------------------------------------------------------------------------
 
 function broadcast(message) {
-  world.sendMessage(message);
+  robwBroadcast(message);
 }
 
 function distanceSq(ax, ay, az, bx, by, bz) {
@@ -632,15 +668,106 @@ function addReturnPoints(player, points) {
   return current + points;
 }
 
+function getPlayerReturnPoints(player) {
+  return getObjective().getScore(player) ?? 0;
+}
+
 // ---------------------------------------------------------------------------
 // 帰還ボックス（インベントリ）
 // ---------------------------------------------------------------------------
 
-/** @returns {"hakoinu" | "wrong" | null} */
-function getReturnBoxKind(itemStack) {
-  if (!itemStack || itemStack.typeId !== CONFIG.RETURN_BOX_ITEM) {
-    return null;
+/** 捕獲順の正誤（アイテム見た目では区別不可） @type {Map<string, ("hakoinu" | "wrong")[]>} */
+const playerReturnBoxLedger = new Map();
+
+function clearPlayerReturnBoxLedger(playerId) {
+  playerReturnBoxLedger.delete(playerId);
+}
+
+function clearAllReturnBoxLedgers() {
+  playerReturnBoxLedger.clear();
+}
+
+function recordCapturedReturnBox(player, kind, amount = 1) {
+  let queue = playerReturnBoxLedger.get(player.id);
+  if (!queue) {
+    queue = [];
+    playerReturnBoxLedger.set(player.id, queue);
   }
+  for (let i = 0; i < amount; i++) {
+    queue.push(kind);
+  }
+}
+
+/** @returns {{ hakoinu: number, wrong: number }} */
+function consumeReturnBoxKindsFromLedger(player, amount) {
+  const returned = { hakoinu: 0, wrong: 0 };
+  if (amount <= 0) return returned;
+
+  const queue = playerReturnBoxLedger.get(player.id) ?? [];
+  let remaining = amount;
+
+  while (remaining > 0 && queue.length > 0) {
+    const kind = queue.shift();
+    returned[kind] += 1;
+    remaining -= 1;
+  }
+
+  if (queue.length === 0) {
+    playerReturnBoxLedger.delete(player.id);
+  } else {
+    playerReturnBoxLedger.set(player.id, queue);
+  }
+
+  return returned;
+}
+
+/** 全プレイヤーの台帳から FIFO で種別を消費（未記録分は別種として減点） */
+function consumeReturnBoxKindsFromAnyLedger(amount) {
+  const returned = { hakoinu: 0, wrong: 0 };
+  if (amount <= 0) return returned;
+
+  let remaining = amount;
+
+  while (remaining > 0) {
+    let consumed = 0;
+    for (const player of world.getPlayers()) {
+      if (remaining <= 0) break;
+      const partial = consumeReturnBoxKindsFromLedger(player, 1);
+      if (partial.hakoinu + partial.wrong <= 0) continue;
+      returned.hakoinu += partial.hakoinu;
+      returned.wrong += partial.wrong;
+      remaining -= 1;
+      consumed += 1;
+    }
+    if (consumed === 0) break;
+  }
+
+  if (remaining > 0) {
+    logWarn(`submitted ${remaining} untracked return box(es); counted as wrong`);
+    returned.wrong += remaining;
+  }
+
+  return returned;
+}
+
+function isReturnBoxItem(itemStack) {
+  if (!itemStack || itemStack.typeId !== CONFIG.RETURN_BOX_ITEM) {
+    return false;
+  }
+
+  const tag = (itemStack.nameTag ?? "").replace(/§./g, "").trim();
+  return (
+    !tag ||
+    tag === CONFIG.RETURN_BOX_DISPLAY_NAME ||
+    tag === CONFIG.RETURN_BOX_NAME ||
+    tag === CONFIG.WRONG_RETURN_BOX_NAME
+  );
+}
+
+/** 旧ワールド互換: 名前で判別できるものだけ。通常の「捕獲した毛皮」は null */
+/** @returns {"hakoinu" | "wrong" | null} */
+function getLegacyReturnBoxKind(itemStack) {
+  if (!isReturnBoxItem(itemStack)) return null;
 
   if (typeof itemStack.getDynamicProperty === "function") {
     const prop = itemStack.getDynamicProperty(CONFIG.RETURN_BOX_KIND_PROPERTY);
@@ -650,62 +777,49 @@ function getReturnBoxKind(itemStack) {
 
   const tag = (itemStack.nameTag ?? "").replace(/§./g, "").trim();
   if (tag === CONFIG.WRONG_RETURN_BOX_NAME) return "wrong";
-  if (
-    !tag ||
-    tag === CONFIG.RETURN_BOX_NAME ||
-    tag === CONFIG.RETURN_BOX_DISPLAY_NAME
-  ) {
-    return "hakoinu";
-  }
+  if (tag === CONFIG.RETURN_BOX_NAME) return "hakoinu";
   return null;
 }
 
-function createReturnBoxStack(amount = 1, kind = "hakoinu") {
+function createReturnBoxStack(amount = 1) {
   const stack = new ItemStack(CONFIG.RETURN_BOX_ITEM, amount);
   stack.nameTag = CONFIG.RETURN_BOX_DISPLAY_NAME;
-
-  if (typeof stack.setDynamicProperty === "function") {
-    stack.setDynamicProperty(CONFIG.RETURN_BOX_KIND_PROPERTY, kind);
-  } else {
-    logWarn(
-      "ItemStack.setDynamicProperty unavailable; capture scoring may be unreliable"
-    );
-  }
   return stack;
 }
 
-function countReturnBoxesInInventory(player) {
-  const container = player.getComponent("inventory")?.container;
-  const counts = { hakoinu: 0, wrong: 0 };
-  if (!container) return counts;
+function countReturnBoxItemsInContainer(container) {
+  let total = 0;
+  if (!container) return total;
 
   for (let slot = 0; slot < container.size; slot++) {
     const item = container.getItem(slot);
-    const kind = getReturnBoxKind(item);
-    if (kind === "hakoinu") counts.hakoinu += item.amount;
-    if (kind === "wrong") counts.wrong += item.amount;
+    if (!isReturnBoxItem(item)) continue;
+    total += item.amount;
   }
-  return counts;
+  return total;
 }
 
 function removeReturnBoxesFromInventory(player) {
   const container = player.getComponent("inventory")?.container;
-  const removed = { hakoinu: 0, wrong: 0 };
+  let removed = 0;
   if (!container) return removed;
 
   for (let slot = 0; slot < container.size; slot++) {
     const item = container.getItem(slot);
-    const kind = getReturnBoxKind(item);
-    if (!kind) continue;
-
-    removed[kind] += item.amount;
+    if (!isReturnBoxItem(item)) continue;
+    removed += item.amount;
     container.setItem(slot, undefined);
+  }
+
+  if (removed > 0) {
+    consumeReturnBoxKindsFromLedger(player, removed);
   }
   return removed;
 }
 
 function giveReturnBox(player, amount = 1, kind = "hakoinu") {
-  const stack = createReturnBoxStack(amount, kind);
+  recordCapturedReturnBox(player, kind, amount);
+  const stack = createReturnBoxStack(amount);
   const container = player.getComponent("inventory")?.container;
   if (!container) {
     player.dimension.spawnItem(stack, player.location);
@@ -811,6 +925,53 @@ function spawnHakoinuAtGate(dimension) {
   spawnRoundAnimalsAtGate(dimension);
 }
 
+function shouldKeepRobwWandItem(item) {
+  if (!item) return false;
+  return isRobwWandItemType(item.typeId);
+}
+
+/** 操作時計だけ残し、骨・毛皮などゲームアイテムを除去 */
+function clearInventoryExceptWand(player) {
+  const container = player.getComponent("inventory")?.container;
+  if (!container) return 0;
+
+  let removed = 0;
+  for (let slot = 0; slot < container.size; slot++) {
+    const item = container.getItem(slot);
+    if (!item || shouldKeepRobwWandItem(item)) continue;
+    container.setItem(slot, undefined);
+    removed += 1;
+  }
+  return removed;
+}
+
+function shouldResetToLobbyInventory() {
+  return gameState !== "running";
+}
+
+function resetPlayerToLobbyInventory(player) {
+  clearPlayerReturnBoxLedger(player.id);
+  if (isSessionHost(player)) {
+    const removed = clearInventoryExceptWand(player);
+    if (removed > 0) {
+      logInfo(
+        `lobby inventory for ${player.name}: removed ${removed} slot(s), kept wand only`
+      );
+    }
+  } else {
+    clearPlayerInventoryCompletely(player);
+  }
+}
+
+function resetAllPlayersToLobbyInventory() {
+  ensureSessionHostAssigned();
+  for (const player of world.getPlayers()) {
+    if (!player?.isValid) continue;
+    resetPlayerToLobbyInventory(player);
+  }
+  ensureHostWandDistribution();
+}
+
 function removeItemTypeFromInventory(player, typeId) {
   const container = player.getComponent("inventory")?.container;
   if (!container) return;
@@ -824,6 +985,18 @@ function removeItemTypeFromInventory(player, typeId) {
 }
 
 function giveStartKit(player) {
+  clearPlayerReturnBoxLedger(player.id);
+  if (isSessionHost(player)) {
+    const cleared = clearInventoryExceptWand(player);
+    if (cleared > 0) {
+      logInfo(
+        `cleared ${cleared} inventory slot(s) for ${player.name} (kept wand, will give bones)`
+      );
+    }
+  } else {
+    removeRobwWandsFromPlayer(player);
+    clearPlayerInventoryCompletely(player);
+  }
   removeItemTypeFromInventory(player, CONFIG.PROTECT_ITEM);
 
   const stack = new ItemStack(CONFIG.PROTECT_ITEM, CONFIG.START_GIVE_BONES);
@@ -867,10 +1040,103 @@ function getActiveBoxGate() {
   return activeRoundCenter ?? CONFIG.BOX_GATE;
 }
 
-function resolveStartHost(initiator) {
-  if (initiator?.isValid) return initiator;
+// ---------------------------------------------------------------------------
+// セッションホスト（ゲート起動・操作時計はホストのみ）
+// ---------------------------------------------------------------------------
+
+/** @returns {import("@minecraft/server").Player | null} */
+function getSessionHost() {
+  if (sessionHostPlayerId) {
+    const found = world.getPlayers().find((p) => p.id === sessionHostPlayerId);
+    if (found?.isValid) return found;
+  }
+
   const players = world.getPlayers();
-  return players.length > 0 ? players[0] : null;
+  if (players.length === 0) {
+    sessionHostPlayerId = null;
+    return null;
+  }
+
+  sessionHostPlayerId = players[0].id;
+  return players[0];
+}
+
+function isSessionHost(player) {
+  if (!player?.isValid) return false;
+  const host = getSessionHost();
+  return host !== null && player.id === host.id;
+}
+
+/** @returns {import("@minecraft/server").Player | null} */
+function ensureSessionHostAssigned() {
+  const host = getSessionHost();
+  return host;
+}
+
+/**
+ * @param {import("@minecraft/server").Player | undefined} player
+ * @param {string} actionLabel
+ * @returns {boolean}
+ */
+function requireSessionHost(player, actionLabel) {
+  if (!player?.isValid) return false;
+  if (isSessionHost(player)) return true;
+  robwPlayerMessage(player, `§c${actionLabel}はホストだけができます。`);
+  return false;
+}
+
+function removeRobwWandsFromPlayer(player) {
+  const container = player.getComponent("inventory")?.container;
+  if (!container) return;
+
+  for (let slot = 0; slot < container.size; slot++) {
+    const item = container.getItem(slot);
+    if (!item || !isRobwWandItemType(item.typeId)) continue;
+    container.setItem(slot, undefined);
+  }
+}
+
+function clearPlayerInventoryCompletely(player) {
+  const container = player.getComponent("inventory")?.container;
+  if (!container) return;
+
+  for (let slot = 0; slot < container.size; slot++) {
+    container.setItem(slot, undefined);
+  }
+}
+
+function ensureHostWandDistribution() {
+  ensureSessionHostAssigned();
+  for (const player of world.getPlayers()) {
+    if (!player?.isValid) continue;
+    if (isSessionHost(player)) {
+      giveStarterWand(player);
+    } else {
+      removeRobwWandsFromPlayer(player);
+    }
+  }
+}
+
+function onSessionHostLeft(player) {
+  if (player.id !== sessionHostPlayerId) return;
+  sessionHostPlayerId = null;
+  system.run(() => {
+    const next = getSessionHost();
+    if (!next) return;
+    robwBroadcast(`§6${next.name}§fがホストになりました。`);
+    logInfo(`session host reassigned to ${next.name}`);
+    if (shouldResetToLobbyInventory()) {
+      resetAllPlayersToLobbyInventory();
+    } else {
+      ensureHostWandDistribution();
+    }
+  });
+}
+
+function resolveStartHost(initiator) {
+  const host = getSessionHost();
+  if (initiator?.isValid && isSessionHost(initiator)) return initiator;
+  return host;
 }
 
 function isPlayerFlying(player) {
@@ -1085,9 +1351,22 @@ function placeSubmissionChest(dimension, spot) {
 /** @returns {boolean} */
 function prepareRoundStart(validation) {
   const dimension = validation.dimension;
+  const { center, chestSpot } = validation;
 
   clearSpawnedRoundEntities();
-  if (!placeSubmissionChest(dimension, validation.chestSpot)) {
+  removePlacedSubmissionChest(dimension);
+
+  const yBase = chestSpot.footY;
+  removeExtraChestsInArea(
+    dimension,
+    center.x,
+    center.z,
+    CONFIG.CHEST_CLEANUP_RADIUS,
+    yBase - 2,
+    yBase + 4
+  );
+
+  if (!placeSubmissionChest(dimension, chestSpot)) {
     return false;
   }
   const spawned = spawnRoundAnimalsAtGate(dimension);
@@ -1149,13 +1428,13 @@ function canCaptureInCurrentGame() {
 function sendCaptureBlockedMessage(player) {
   switch (gameState) {
     case "countdown":
-      player.sendMessage("§c起動カウントダウン中は捕獲できません。");
+      robwPlayerMessage(player,"§c起動カウントダウン中は捕獲できません。");
       break;
     case "closing":
-      player.sendMessage("§cゲート閉鎖中は捕獲できません。");
+      robwPlayerMessage(player,"§cゲート閉鎖中は捕獲できません。");
       break;
     default:
-      player.sendMessage(
+      robwPlayerMessage(player,
         `§cゲート停止中は捕獲できません。${CONFIG.CHAT_PREFIX} start で起動してください。`
       );
       break;
@@ -1190,7 +1469,7 @@ function tryProtectHakoinu(player, preferredTarget) {
     target = findNearestProtectableAnimal(player);
   }
   if (!target) {
-    player.sendMessage("§7近くにハコイヌや動物がいません。");
+    robwPlayerMessage(player,"§7近くにハコイヌや動物がいません。");
     return;
   }
 
@@ -1204,10 +1483,9 @@ function tryProtectHakoinu(player, preferredTarget) {
   giveReturnBox(player, 1, kind);
   broadcast(`§a${player.name}§fが毛皮を手に入れた！`);
   const chest = getActiveSubmissionChestPos();
-  player.sendMessage(
+  robwPlayerMessage(player,
     `§7${CONFIG.RETURN_BOX_DISPLAY_NAME} を納品チェスト (${chest.x}, ${chest.y}, ${chest.z}) に入れてください。`
   );
-  player.sendMessage("§8(注) 正解かどうかは納品して初めて分かります");
   logInfo(`${kind} captured by ${player.name} (entity ${entityId}, ${entityType})`);
 }
 
@@ -1262,42 +1540,57 @@ function noteSubmissionChestUse(player) {
 }
 
 function countCaptureItemsInContainer(container) {
-  const counts = { hakoinu: 0, wrong: 0 };
+  const counts = { hakoinu: 0, wrong: 0, unified: 0 };
   if (!container) return counts;
 
   for (let slot = 0; slot < container.size; slot++) {
     const item = container.getItem(slot);
-    const kind = getReturnBoxKind(item);
-    if (kind === "hakoinu") counts.hakoinu += item.amount;
-    if (kind === "wrong") counts.wrong += item.amount;
+    if (!isReturnBoxItem(item)) continue;
+
+    const legacyKind = getLegacyReturnBoxKind(item);
+    if (legacyKind === "hakoinu") {
+      counts.hakoinu += item.amount;
+    } else if (legacyKind === "wrong") {
+      counts.wrong += item.amount;
+    } else {
+      counts.unified += item.amount;
+    }
   }
   return counts;
 }
 
 function hasCaptureItemsInContainer(container) {
   const counts = countCaptureItemsInContainer(container);
-  return counts.hakoinu > 0 || counts.wrong > 0;
+  return counts.hakoinu > 0 || counts.wrong > 0 || counts.unified > 0;
 }
 
 function clearCaptureItemsFromContainer(container) {
-  const removed = { hakoinu: 0, wrong: 0 };
+  const removed = { hakoinu: 0, wrong: 0, unified: 0 };
   if (!container) return removed;
 
   for (let slot = 0; slot < container.size; slot++) {
     const item = container.getItem(slot);
-    const kind = getReturnBoxKind(item);
-    if (!kind) continue;
+    if (!isReturnBoxItem(item)) continue;
 
-    removed[kind] += item.amount;
+    const legacyKind = getLegacyReturnBoxKind(item);
+    if (legacyKind === "hakoinu") {
+      removed.hakoinu += item.amount;
+    } else if (legacyKind === "wrong") {
+      removed.wrong += item.amount;
+    } else {
+      removed.unified += item.amount;
+    }
     container.setItem(slot, undefined);
   }
   return removed;
 }
 
 function announceDelivery(player, returned, points, total) {
+  const wrongPenalty = returned.wrong * CONFIG.POINTS_WRONG_ANIMAL;
+
   if (returned.wrong > 0 && returned.hakoinu > 0) {
     broadcast(
-      `§6${player.name}§fが納品しました！ §aハコイヌ${returned.hakoinu} §7/ §c別種${returned.wrong} §7-> ${formatPointsDelta(points)} §7(合計 ${total}pt)`
+      `§6${player.name}§fが納品しました！ §aハコイヌ${returned.hakoinu} §7/ §c別種${returned.wrong} (${formatPointsDelta(wrongPenalty)}) §7-> ${formatPointsDelta(points)} §7(合計 ${total}pt)`
     );
   } else if (returned.wrong > 0) {
     broadcast(
@@ -1321,16 +1614,23 @@ function processSubmissionChest(player) {
   const container = getSubmissionChestContainer();
   if (!container) {
     const chest = getActiveSubmissionChestPos();
-    player.sendMessage(
+    robwPlayerMessage(player,
       `§c納品チェストがありません。(${chest.x}, ${chest.y}, ${chest.z}) 付近を確認してください。`
     );
     return;
   }
 
   const pending = countCaptureItemsInContainer(container);
-  if (pending.hakoinu <= 0 && pending.wrong <= 0) return;
+  if (pending.hakoinu <= 0 && pending.wrong <= 0 && pending.unified <= 0) {
+    return;
+  }
 
-  const returned = clearCaptureItemsFromContainer(container);
+  const cleared = clearCaptureItemsFromContainer(container);
+  const fromLedger = consumeReturnBoxKindsFromAnyLedger(cleared.unified);
+  const returned = {
+    hakoinu: cleared.hakoinu + fromLedger.hakoinu,
+    wrong: cleared.wrong + fromLedger.wrong,
+  };
   if (returned.hakoinu <= 0 && returned.wrong <= 0) return;
 
   const points =
@@ -1343,11 +1643,17 @@ function processSubmissionChest(player) {
     giveBones(player, bonesEarned);
   }
   announceDelivery(player, returned, points, total);
-  player.sendMessage(
+  robwPlayerMessage(player,
     `§7納品した毛皮 ${returned.hakoinu + returned.wrong} 枚を消費しました。`
   );
+  if (returned.wrong > 0) {
+    robwPlayerMessage(
+      player,
+      `§c別種 ${returned.wrong} 枚 … ${formatPointsDelta(returned.wrong * CONFIG.POINTS_WRONG_ANIMAL)}`
+    );
+  }
   if (bonesEarned > 0) {
-    player.sendMessage(
+    robwPlayerMessage(player,
       `§a納品ボーナス: 骨 x${bonesEarned} §7(ハコイヌ 1 匹あたり x${CONFIG.BONES_PER_HAKOINU_DELIVERY})`
     );
   }
@@ -1464,28 +1770,25 @@ function clearTimerSidebarParticipants() {
   }
   timerHudRemainingName = null;
   timerHudLimitName = null;
+  timerHudChestName = null;
+  timerHudPlayerPointNames.clear();
 }
 
 function removeTimerFakePlayer(objective, name) {
   if (!name) return;
   try {
-    objective.removeParticipant({
-      name,
-      type: ScoreboardIdentityType.FakePlayer,
-    });
+    objective.removeParticipant(name);
   } catch {
     // ignore
   }
 }
 
 function setTimerFakePlayer(objective, name, score) {
-  objective.setScore(
-    { name, type: ScoreboardIdentityType.FakePlayer },
-    score
-  );
+  objective.setScore(name, score);
 }
 
 function clearRemainingTimeHud() {
+  timerHudActive = false;
   stopRemainingTimeHudLoop();
 
   for (const player of world.getPlayers()) {
@@ -1496,14 +1799,38 @@ function clearRemainingTimeHud() {
     }
   }
 
-  clearTimerSidebarParticipants();
-
   try {
-    if (typeof world.scoreboard.clearObjectiveAtDisplaySlot === "function") {
-      world.scoreboard.clearObjectiveAtDisplaySlot(DisplaySlotId.Sidebar);
+    const board = world.scoreboard;
+    const objective = board.getObjective(CONFIG.TIMER_SCORE_OBJECTIVE);
+    if (objective) {
+      if (timerHudRemainingName) {
+        removeTimerFakePlayer(objective, timerHudRemainingName);
+      }
+      if (timerHudLimitName) {
+        removeTimerFakePlayer(objective, timerHudLimitName);
+      }
+      if (timerHudChestName) {
+        removeTimerFakePlayer(objective, timerHudChestName);
+      }
+      for (const name of timerHudPlayerPointNames.values()) {
+        removeTimerFakePlayer(objective, name);
+      }
+      timerHudPlayerPointNames.clear();
+      clearTimerSidebarParticipants();
+      if (typeof board.removeObjective === "function") {
+        board.removeObjective(objective);
+      }
     }
-  } catch {
-    // ignore
+    timerHudRemainingName = null;
+    timerHudLimitName = null;
+    timerHudChestName = null;
+    timerHudPlayerPointNames.clear();
+
+    if (typeof board.clearObjectiveAtDisplaySlot === "function") {
+      board.clearObjectiveAtDisplaySlot(DisplaySlotId.Sidebar);
+    }
+  } catch (error) {
+    logWarn(`clear timer hud failed: ${error}`);
   }
 }
 
@@ -1522,6 +1849,24 @@ function formatLimitTimeHudText() {
   return `§7制限 §f${time}`;
 }
 
+function formatChestHudLine() {
+  const chest = getActiveSubmissionChestPos();
+  return `§7納品 §f${chest.x} ${chest.y} ${chest.z}`;
+}
+
+function formatPlayerPointsHudLine(player, solo) {
+  const pts = getPlayerReturnPoints(player);
+  if (solo) {
+    return `§f帰還 §e${pts}pt`;
+  }
+  return `§7${player.name} §e${pts}pt`;
+}
+
+function formatPlayerHudActionBar(player, remainingLineText, limitLineText) {
+  const pts = getPlayerReturnPoints(player);
+  return `${remainingLineText} §7| ${limitLineText} §7| §f帰還 §e${pts}pt §7| ${formatChestHudLine()}`;
+}
+
 function updateTimerSidebarLine(objective, previousName, lineText, score) {
   if (previousName && previousName !== lineText) {
     removeTimerFakePlayer(objective, previousName);
@@ -1530,22 +1875,55 @@ function updateTimerSidebarLine(objective, previousName, lineText, score) {
   return lineText;
 }
 
-/** サイドバー: 上＝残り（score 2）、下＝制限時間（score 1） */
+/**
+ * サイドバー（上→下）: 残り / 制限 / 納品座標 / 帰還pt（1人時）または各プレイヤー
+ */
 function updateTimerSidebar(remainingLineText, limitLineText) {
+  if (!timerHudActive || gameState !== "running") return false;
+
   try {
     const objective = getTimerObjective();
     timerHudRemainingName = updateTimerSidebarLine(
       objective,
       timerHudRemainingName,
       remainingLineText,
-      2
+      6
     );
     timerHudLimitName = updateTimerSidebarLine(
       objective,
       timerHudLimitName,
       limitLineText,
-      1
+      5
     );
+    timerHudChestName = updateTimerSidebarLine(
+      objective,
+      timerHudChestName,
+      formatChestHudLine(),
+      4
+    );
+
+    const players = world.getPlayers().filter((p) => p?.isValid);
+    const solo = players.length === 1;
+    const activeIds = new Set();
+    let slot = 3;
+
+    for (const player of players) {
+      const line = formatPlayerPointsHudLine(player, solo);
+      const prev = timerHudPlayerPointNames.get(player.id);
+      timerHudPlayerPointNames.set(
+        player.id,
+        updateTimerSidebarLine(objective, prev, line, slot)
+      );
+      activeIds.add(player.id);
+      slot -= 1;
+    }
+
+    for (const [playerId, name] of timerHudPlayerPointNames) {
+      if (activeIds.has(playerId)) continue;
+      removeTimerFakePlayer(objective, name);
+      timerHudPlayerPointNames.delete(playerId);
+    }
+
     return true;
   } catch (error) {
     logWarn(`timer sidebar update failed: ${error}`);
@@ -1555,16 +1933,22 @@ function updateTimerSidebar(remainingLineText, limitLineText) {
 
 function updateRemainingTimeHud(remainingTicks) {
   if (!CONFIG.SHOW_REMAINING_TIME_HUD) return;
+  if (!timerHudActive || gameState !== "running") {
+    clearRemainingTimeHud();
+    return;
+  }
 
   const remainingText = formatRemainingTimeHudText(remainingTicks);
   const limitText = formatLimitTimeHudText();
   const sidebarOk = updateTimerSidebar(remainingText, limitText);
 
   if (!sidebarOk) {
-    const combined = `${remainingText} §7| ${limitText}`;
     for (const player of world.getPlayers()) {
+      if (!player?.isValid) continue;
       try {
-        player.onScreenDisplay?.setActionBar(combined);
+        player.onScreenDisplay?.setActionBar(
+          formatPlayerHudActionBar(player, remainingText, limitText)
+        );
       } catch {
         // ignore
       }
@@ -1585,9 +1969,20 @@ function startRemainingTimeHudLoop() {
   if (gameState !== "running") return;
 
   stopRemainingTimeHudLoop();
+  timerHudActive = true;
   setupTimerSidebar();
   refreshRemainingTimeHud();
   hudLoopId = system.runInterval(refreshRemainingTimeHud, 10);
+}
+
+function startTimerHudWatchdog() {
+  if (timerHudWatchdogId !== undefined) return;
+  timerHudWatchdogId = system.runInterval(() => {
+    if (gameState === "running" && timerHudActive) return;
+    const objective = world.scoreboard.getObjective(CONFIG.TIMER_SCORE_OBJECTIVE);
+    if (!objective) return;
+    clearRemainingTimeHud();
+  }, 40);
 }
 
 function notifyMilestones(remainingTicks) {
@@ -1619,7 +2014,9 @@ function tickGameTimer() {
   }
 
   notifyMilestones(remaining);
-  updateRemainingTimeHud(remaining);
+  if (timerHudActive) {
+    updateRemainingTimeHud(remaining);
+  }
 
   const nowMs = Date.now();
   if (nowMs >= nextTimeNotifyWallMs) {
@@ -1661,7 +2058,7 @@ function beginGameRound(host, validation) {
     activeSubmissionChestPos = null;
     placedChestRestore = null;
     clearRemainingTimeHud();
-    host.sendMessage("§c納品チェストを設置できませんでした。地面の上で start してください。");
+    robwPlayerMessage(host,"§c納品チェストを設置できませんでした。地面の上で start してください。");
     logWarn("start rolled back: chest placement failed");
     return;
   }
@@ -1679,30 +2076,34 @@ function beginGameRound(host, validation) {
     processSubmissionChest(lastSubmissionPlayer);
   }, TICKS_PER_SECOND);
 
-  host.sendMessage("§a[ROBW] ゲートを起動しました！");
+  robwPlayerMessage(host,"§a[ROBW] ゲートを起動しました！");
   logInfo(
     `Game started at (${validation.center.x}, ${validation.center.y}, ${validation.center.z}) by ${host.name}`
   );
 }
 
 function startGame(initiator) {
+  if (initiator && !requireSessionHost(initiator, "ゲートの起動")) {
+    return;
+  }
+
   if (gameState === "running") {
     const msg = `§cすでにゲート開放中です。${CONFIG.CHAT_PREFIX} stop で閉鎖できます。`;
     broadcast(msg);
-    initiator?.sendMessage(msg);
+    robwPlayerMessage(initiator, msg);
     logWarn("Start command ignored because game is already running");
     return;
   }
 
   if (gameState === "countdown") {
     const msg = "§cカウントダウン中です。しばらくお待ちください。";
-    initiator?.sendMessage(msg);
+    robwPlayerMessage(initiator, msg);
     return;
   }
 
   if (gameState === "closing") {
     const msg = "§c閉鎖演出中です。しばらくお待ちください。";
-    initiator?.sendMessage(msg);
+    robwPlayerMessage(initiator, msg);
     return;
   }
 
@@ -1714,7 +2115,7 @@ function startGame(initiator) {
 
   const validation = validateRoundStartAtPlayer(host);
   if (!validation.ok) {
-    host.sendMessage(validation.message);
+    robwPlayerMessage(host,validation.message);
     logWarn(`start blocked for ${host.name}: ${validation.reason}`);
     return;
   }
@@ -1757,12 +2158,14 @@ function resetGame() {
   gameState = "waiting";
   resetTimerState();
   resetAllScores();
+  clearAllReturnBoxLedgers();
   clearSpawnedHakoinu();
   activeRoundCenter = null;
   const players = world.getPlayers();
   if (players.length > 0) {
     removePlacedSubmissionChest(players[0].dimension);
   }
+  resetAllPlayersToLobbyInventory();
   broadcast(`§eリセット完了。${CONFIG.CHAT_PREFIX} start でゲートを起動できます。`);
   logInfo("Game reset");
 }
@@ -1781,9 +2184,11 @@ function runRobwSubcommand(sub, player) {
       startGame(player);
       break;
     case "stop":
+      if (player && !requireSessionHost(player, "ゲートの閉鎖")) break;
       stopGame();
       break;
     case "reset":
+      if (player && !requireSessionHost(player, "リセット")) break;
       resetGame();
       break;
     case "ranking":
@@ -1791,7 +2196,7 @@ function runRobwSubcommand(sub, player) {
       break;
     default:
       if (player) {
-        player.sendMessage(
+        robwPlayerMessage(player,
           `§7使用法: ${CONFIG.CHAT_PREFIX} start | stop | reset | ranking`
         );
       }
@@ -1825,12 +2230,20 @@ function stripFormatting(text) {
   return text.replace(/§./g, "").trim();
 }
 
+function isRobwWandItemType(typeId) {
+  return typeId === CONFIG.WAND_ITEM || typeId === CONFIG.WAND_ITEM_CUSTOM;
+}
+
 function resolveWandSubcommand(itemStack) {
-  if (!itemStack || itemStack.typeId !== CONFIG.WAND_ITEM) return undefined;
+  if (!itemStack || !isRobwWandItemType(itemStack.typeId)) return undefined;
+
+  if (itemStack.typeId === CONFIG.WAND_ITEM_CUSTOM) {
+    return "menu";
+  }
 
   const raw = itemStack.nameTag ?? "";
   const name = stripFormatting(raw);
-  if (!name) return undefined;
+  if (!name) return "menu";
 
   const exact = CONFIG.WAND_NAMES[name];
   if (exact) return exact;
@@ -1849,7 +2262,7 @@ function resolveWandSubcommand(itemStack) {
     return cmd;
   }
 
-  return undefined;
+  return "menu";
 }
 
 function getRobwMenuStateLabel() {
@@ -1873,59 +2286,67 @@ function getRobwMenuStatePlain() {
   return stripFormatting(getRobwMenuStateLabel());
 }
 
-function handleRobwMenuResponse(player, response) {
-  if (!player?.isValid) return;
-  if (response.canceled || response.selection === undefined) {
-    player.sendMessage("§7[ROBW] メニューを閉じました");
-    return;
-  }
-
-  const actions = ["start", "stop", "reset", "ranking"];
-  const sub = actions[response.selection];
-  if (!sub) return;
-
+function onRobwMenuSelected(player, sub) {
   runRobwSubcommand(sub, player);
   if (sub !== "ranking") {
-    player.sendMessage(`§7[ROBW] ${sub} を実行しました`);
+    robwPlayerMessage(player,`§7[ROBW] ${sub} を実行しました`);
   }
 }
 
-function sendRobwMenuOpenFailed(player, error) {
-  logWarn(`ROBW menu failed: ${error}`);
-  player.sendMessage("§cメニューを開けませんでした。");
-  player.sendMessage(
-    `§7代わりにチャット: §f${CONFIG.CHAT_PREFIX} start§7 / §fstop§7 / §freset§7 / §franking`
-  );
-  player.sendMessage("§7または §f/function robw/stop §7(チート ON)");
+function openRobwControlMenuChat(player) {
+  const state = getRobwMenuStatePlain();
+  robwPlayerMessage(player,"§6§l--- Return of BoxWorld ---");
+  robwPlayerMessage(player,`§7状態: ${state}`);
+  robwPlayerMessage(player,"§e操作 (チート ON で入力):");
+  robwPlayerMessage(player,"§f/scriptevent robw:menu run §7- この一覧");
+  robwPlayerMessage(player,"§f/scriptevent robw:start run §7- ゲート起動");
+  robwPlayerMessage(player,"§f/scriptevent robw:stop run §7- ゲート閉鎖");
+  robwPlayerMessage(player,"§f/scriptevent robw:reset run §7- リセット");
+  robwPlayerMessage(player,"§f/scriptevent robw:ranking run §7- ランキング");
+  robwPlayerMessage(player,"§7(パック適用済みなら) §f/function robw/start §7なども可");
+  robwPlayerMessage(player,`§7または §f${CONFIG.CHAT_PREFIX} start §7(Beta API 要)`);
 }
 
-/** UI は § 非対応のためプレーンテキスト。form.show は system.run 内で呼ばない */
 function openRobwControlMenu(player) {
   if (!player?.isValid) return;
 
-  const form = new ActionFormData()
-    .title("Return of BoxWorld")
-    .body(
-      `${getRobwMenuStatePlain()}\n\n` +
-        "操作を選んでください。\n" +
-        "(注) 空中で右クリック(ブロックを狙わない)"
-    )
-    .button("ゲート起動\nstart")
-    .button("ゲート閉鎖\nstop")
-    .button("リセット\nreset")
-    .button("ランキング\nranking");
-
-  form.show(player).then(
-    (response) => {
-      system.run(() => handleRobwMenuResponse(player, response));
-    },
-    (error) => {
-      system.run(() => {
-        if (!player.isValid) return;
-        sendRobwMenuOpenFailed(player, error);
-      });
+  system.run(() => {
+    if (!player.isValid) return;
+    const showForm = globalThis.robwShowActionMenu;
+    if (typeof showForm === "function") {
+      showForm(player, getRobwMenuStatePlain(), onRobwMenuSelected);
+      return;
     }
-  );
+    openRobwControlMenuChat(player);
+  });
+}
+
+function tryOpenRobwMenuFromWand(player, itemStack) {
+  if (!player?.isValid) return false;
+  if (!shouldProcessWandUse(player.id)) return true;
+
+  const held = itemStack ?? getHeldItemStack(player);
+  if (!held || !isRobwWandItemType(held.typeId)) return false;
+
+  if (!isSessionHost(player)) {
+    removeRobwWandsFromPlayer(player);
+    robwPlayerMessage(player, "§c操作時計はホストだけが使えます。");
+    return true;
+  }
+
+  const sub = resolveWandSubcommand(held);
+  if (!sub) return false;
+
+  robwPlayerMessage(player,"§7[ROBW] 操作時計を使用中...");
+
+  if (sub === "menu") {
+    openRobwControlMenu(player);
+    return true;
+  }
+
+  runRobwSubcommand(sub, player);
+  robwPlayerMessage(player,`§7[ROBW] ${sub} を実行しました`);
+  return true;
 }
 
 function getHeldItemStack(player) {
@@ -1955,56 +2376,130 @@ function shouldProcessWandUse(playerId) {
 }
 
 function tryRobwWand(player, itemStack) {
-  if (!shouldProcessWandUse(player.id)) return false;
-
-  const held = itemStack ?? getHeldItemStack(player);
-  const sub = resolveWandSubcommand(held);
-  if (!sub) return false;
-
-  if (sub === "menu") {
-    openRobwControlMenu(player);
-    return true;
-  }
-
-  runRobwSubcommand(sub, player);
-  player.sendMessage(`§7[ROBW] ${sub} を実行しました`);
-  return true;
+  return tryOpenRobwMenuFromWand(player, itemStack);
 }
 
-function playerHasRobwWand(player) {
+function playerHasStarterWand(player) {
   const container = player.getComponent("inventory")?.container;
   if (!container) return false;
 
   for (let slot = 0; slot < container.size; slot++) {
     const item = container.getItem(slot);
-    if (resolveWandSubcommand(item)) return true;
+    if (!item) continue;
+    if (item.typeId === CONFIG.WAND_ITEM_CUSTOM) return true;
+    if (item.typeId !== CONFIG.WAND_ITEM) continue;
+    const name = stripFormatting(item.nameTag ?? "");
+    if (!name) continue;
+    if (
+      name === CONFIG.WAND_MENU_NAME ||
+      name.toLowerCase().startsWith("robw")
+    ) {
+      return true;
+    }
   }
   return false;
 }
 
-function giveStarterWand(player) {
-  if (playerHasRobwWand(player)) return;
-
-  const stack = new ItemStack(CONFIG.WAND_ITEM, 1);
-  stack.nameTag = CONFIG.WAND_MENU_NAME;
-
+function addItemStackToPlayer(player, stack) {
   const container = player.getComponent("inventory")?.container;
   if (container) {
     const leftover = container.addItem(stack);
     if (leftover) {
       player.dimension.spawnItem(leftover, player.location);
     }
-  } else {
-    player.dimension.spawnItem(stack, player.location);
+    return true;
   }
+  player.dimension.spawnItem(stack, player.location);
+  return true;
+}
 
-  player.sendMessage(
-    "§a[ROBW] 操作メニュー用の時計を渡しました。§f空中§aで右クリック -> start / stop / reset"
-  );
+function tryGiveCustomControlItem(player) {
+  try {
+    const stack = new ItemStack(CONFIG.WAND_ITEM_CUSTOM, 1);
+    stack.nameTag = CONFIG.WAND_MENU_NAME;
+    addItemStackToPlayer(player, stack);
+    logInfo(`bonus ${CONFIG.WAND_ITEM_CUSTOM} given to ${player.name}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {import("@minecraft/server").Player} player
+ * @param {{ notifyIfOwned?: boolean }} [options]
+ *   notifyIfOwned … true のときだけ「既に持っています」を表示（/give_wand 等）
+ */
+function giveStarterWand(player, options) {
+  if (!player?.isValid) return;
+  if (!isSessionHost(player)) {
+    removeRobwWandsFromPlayer(player);
+    if (options?.notifyIfOwned === true) {
+      robwPlayerMessage(player, "§c操作時計はホストだけが持てます。");
+    }
+    return;
+  }
+  const notifyIfOwned = options?.notifyIfOwned === true;
+
+  try {
+    if (playerHasStarterWand(player)) {
+      if (notifyIfOwned) {
+        robwPlayerMessage(player, "§7[ROBW] 操作時計は既に持っています");
+      }
+      return;
+    }
+
+    const stack = new ItemStack(CONFIG.WAND_ITEM, 1);
+    stack.nameTag = CONFIG.WAND_MENU_NAME;
+    addItemStackToPlayer(player, stack);
+
+    robwPlayerMessage(player,
+      "§a[ROBW] 操作時計を渡しました。§fブロック右クリック§aでメニュー(start/stop/reset)"
+    );
+    logInfo(`gave ${CONFIG.WAND_ITEM} (${CONFIG.WAND_MENU_NAME}) to ${player.name}`);
+
+    tryGiveCustomControlItem(player);
+  } catch (error) {
+    logError(`giveStarterWand failed for ${player.name}: ${error}`);
+    robwPlayerMessage(player,"§c[ROBW] 操作時計の配布に失敗しました");
+    robwPlayerMessage(player,"§7/scriptevent robw:give_wand run または /give @s clock 1");
+  }
+}
+
+function scheduleStarterWandRetries(player) {
+  if (!player?.isValid || !isSessionHost(player) || playerHasStarterWand(player)) {
+    return;
+  }
+  for (const delay of [20, 60, 120]) {
+    system.runTimeout(() => {
+      if (!player?.isValid) return;
+      giveStarterWand(player);
+    }, delay);
+  }
 }
 
 function handleScriptEvent(eventId, sourceEntity) {
   const id = eventId.toLowerCase();
+  const player =
+    sourceEntity && typeof sourceEntity.sendMessage === "function"
+      ? sourceEntity
+      : undefined;
+
+  if (
+    id.includes("give_wand") ||
+    id.endsWith(":wand") ||
+    id.includes(":menu") ||
+    id.endsWith(":menu")
+  ) {
+    if (!player) return;
+    if (id.includes("give_wand") || id.endsWith(":wand")) {
+      giveStarterWand(player, { notifyIfOwned: true });
+      return;
+    }
+    openRobwControlMenu(player);
+    return;
+  }
+
   const match =
     id.match(/(?:^|[:_/])(start|stop|reset|ranking)$/) ??
     id.match(/^robw[:_](start|stop|reset|ranking)$/);
@@ -2013,10 +2508,6 @@ function handleScriptEvent(eventId, sourceEntity) {
     return;
   }
 
-  const player =
-    sourceEntity && typeof sourceEntity.sendMessage === "function"
-      ? sourceEntity
-      : undefined;
   runRobwSubcommand(match[1], player);
 }
 
@@ -2031,9 +2522,9 @@ function onItemUsed(player, itemStack) {
   }
 
   const held = getHeldItemStack(player);
-  if (held?.typeId === CONFIG.WAND_ITEM && held.nameTag) {
-    player.sendMessage(
-      `§7[ROBW] 時計の名前を確認: §f"${stripFormatting(held.nameTag)}"`
+  if (held && isRobwWandItemType(held.typeId)) {
+    robwPlayerMessage(player,
+      "§7[ROBW] 操作アイテムを右クリック(空中またはブロック)してください。"
     );
   }
 }
@@ -2056,7 +2547,7 @@ function registerChatHandlers() {
     system.run(() => {
       if (!shouldProcessChatCommand(sender.id, message)) return;
       if (!handleChatCommand(sender, message)) {
-        sender.sendMessage("§c[ROBW] コマンドを認識できませんでした");
+        robwPlayerMessage(sender, "§c[ROBW] コマンドを認識できませんでした");
       }
     });
   };
@@ -2107,10 +2598,7 @@ function registerSubmissionChestHandler() {
 
 function getRobwItemUseStack(player, eventStack) {
   const held = getHeldItemStack(player);
-  if (
-    held?.typeId === CONFIG.WAND_ITEM ||
-    held?.typeId === CONFIG.PROTECT_ITEM
-  ) {
+  if (held && (isRobwWandItemType(held.typeId) || held.typeId === CONFIG.PROTECT_ITEM)) {
     return held;
   }
   return eventStack ?? held;
@@ -2119,10 +2607,7 @@ function getRobwItemUseStack(player, eventStack) {
 function isRobwHandledItemUse(itemStack) {
   if (!itemStack) return false;
   if (itemStack.typeId === CONFIG.PROTECT_ITEM) return true;
-  if (itemStack.typeId === CONFIG.WAND_ITEM) {
-    return !!resolveWandSubcommand(itemStack);
-  }
-  return false;
+  return isRobwWandItemType(itemStack.typeId);
 }
 
 function registerItemUseHandlers() {
@@ -2137,10 +2622,8 @@ function registerItemUseHandlers() {
     if (!isRobwHandledItemUse(itemStack)) return;
     if (cancelVanilla) event.cancel = true;
 
-    const sub = resolveWandSubcommand(itemStack);
-    if (sub === "menu") {
-      if (!shouldProcessWandUse(player.id)) return;
-      openRobwControlMenu(player);
+    if (isRobwWandItemType(itemStack.typeId)) {
+      system.run(() => tryOpenRobwMenuFromWand(player, itemStack));
       return;
     }
 
@@ -2151,17 +2634,128 @@ function registerItemUseHandlers() {
   if (beforeUse) {
     beforeUse.subscribe((event) => onItemUse(event, true));
     logInfo("item handler: beforeEvents.itemUse (wand + bone)");
-    return;
   }
 
   const afterUse = world.afterEvents?.itemUse;
   if (afterUse) {
     afterUse.subscribe((event) => onItemUse(event, false));
     logInfo("item handler: afterEvents.itemUse (wand + bone)");
+  }
+
+  if (!beforeUse && !afterUse) {
+    logWarn("itemUse events not available");
+  }
+}
+
+function registerWandInteractHandlers() {
+  const onBlockInteract = (event, cancelVanilla) => {
+    const player = event.player;
+    if (!player) return;
+    if (event.block && isSubmissionChestBlock(event.block)) return;
+
+    const held = getHeldItemStack(player);
+    if (!held || !isRobwWandItemType(held.typeId)) return;
+    if (cancelVanilla) event.cancel = true;
+
+    system.run(() => tryOpenRobwMenuFromWand(player, held));
+  };
+
+  const before = world.beforeEvents?.playerInteractWithBlock;
+  if (before) {
+    before.subscribe((event) => onBlockInteract(event, true));
+    logInfo("wand handler: beforeEvents.playerInteractWithBlock");
+  }
+
+  const after = world.afterEvents?.playerInteractWithBlock;
+  if (after) {
+    after.subscribe((event) => onBlockInteract(event, false));
+    logInfo("wand handler: afterEvents.playerInteractWithBlock");
+  }
+
+  if (!before && !after) {
+    logWarn("playerInteractWithBlock not available for wand");
+  }
+}
+
+function registerRobwCustomCommands(initEvent) {
+  const registry = initEvent?.customCommandRegistry;
+  if (!registry?.registerCommand) {
+    logInfo(
+      "customCommandRegistry unavailable — use /scriptevent robw:start (game 1.21.80+ for /robw:start)"
+    );
     return;
   }
 
-  logWarn("itemUse events not available");
+  const specs = [
+    ["robw:menu", "操作メニュー", "menu"],
+    ["robw:start", "ゲート起動", "start"],
+    ["robw:stop", "ゲート閉鎖", "stop"],
+    ["robw:reset", "リセット", "reset"],
+    ["robw:ranking", "ランキング", "ranking"],
+    ["robw:give_wand", "操作時計を配布", "give_wand"],
+  ];
+
+  for (const [name, description, action] of specs) {
+    registry.registerCommand(
+      {
+        name,
+        description: `ROBW: ${description}`,
+        permissionLevel: 0,
+        cheatsRequired: false,
+      },
+      (origin) => {
+        const entity = origin?.sourceEntity;
+        system.run(() => {
+          if (action === "menu") {
+            if (entity) openRobwControlMenu(entity);
+            return;
+          }
+          if (action === "give_wand") {
+            if (entity) giveStarterWand(entity, { notifyIfOwned: true });
+            return;
+          }
+          runRobwSubcommand(action, entity);
+        });
+        return { status: 0 };
+      }
+    );
+  }
+
+  logInfo("registered slash commands: /robw:start, /robw:menu, ...");
+}
+
+let robwStartupRegistered = false;
+
+function registerRobwItemComponents() {
+  if (robwStartupRegistered) return;
+
+  const startup = system.beforeEvents?.startup;
+  if (!startup) {
+    logWarn("startup event unavailable; robw:control may not respond to use");
+    return;
+  }
+
+  robwStartupRegistered = true;
+  startup.subscribe((initEvent) => {
+    registerRobwCustomCommands(initEvent);
+
+    const itemRegistry = initEvent?.itemComponentRegistry;
+    if (!itemRegistry?.registerCustomComponent) {
+      logWarn("itemComponentRegistry unavailable; robw:control may not respond to use");
+      return;
+    }
+
+    itemRegistry.registerCustomComponent("robw:control_menu", {
+      onUse(event) {
+        const player = event.source;
+        if (!player?.isValid) return;
+        const stack = event.itemStack;
+        system.run(() => tryOpenRobwMenuFromWand(player, stack));
+      },
+    });
+    logInfo("registered item component: robw:control_menu");
+  });
+  logInfo("subscribed startup (item components + custom commands)");
 }
 
 function registerBoneInteractHandlers() {
@@ -2180,7 +2774,6 @@ function registerBoneInteractHandlers() {
   if (before) {
     before.subscribe((event) => onInteract(event, true));
     logInfo("bone handler: beforeEvents.playerInteractWithEntity");
-    return;
   }
 
   const after = world.afterEvents?.playerInteractWithEntity;
@@ -2193,38 +2786,38 @@ function registerBoneInteractHandlers() {
 function registerGameEvents() {
   if (gameEventsRegistered) return;
 
-  try {
-    registerChatHandlers();
-    registerItemUseHandlers();
-    registerBoneInteractHandlers();
-    registerSubmissionChestHandler();
+  registerChatHandlers();
+  registerItemUseHandlers();
+  registerWandInteractHandlers();
+  registerBoneInteractHandlers();
+  registerSubmissionChestHandler();
 
-    if (world.afterEvents?.scriptEventReceive) {
-      world.afterEvents.scriptEventReceive.subscribe((event) => {
-        logInfo(`scriptevent received: ${event.id}`);
-        system.run(() => {
-          handleScriptEvent(event.id, event.sourceEntity);
-        });
+  const scriptEventSignal =
+    system.afterEvents?.scriptEventReceive ??
+    world.afterEvents?.scriptEventReceive;
+  if (scriptEventSignal) {
+    scriptEventSignal.subscribe((event) => {
+      logInfo(`scriptevent received: ${event.id}`);
+      system.run(() => {
+        handleScriptEvent(event.id, event.sourceEntity);
       });
-      logInfo("registered /scriptevent robw:* handler");
-    } else {
-      logWarn("scriptEventReceive not available");
-    }
-
-    gameEventsRegistered = true;
-  } catch (error) {
-    logError(`registerGameEvents failed: ${error}`);
-    throw error;
+    });
+    logInfo("registered /scriptevent robw:* handler");
+  } else {
+    logWarn("scriptEventReceive not available");
   }
+
+  gameEventsRegistered = true;
+  console.warn("[ROBW] game events registered");
 }
 
 function getRobwHelpLines() {
   const lines = [
     "§a[ROBW] 準備OK",
-    "§7(1) 時計 §fROBW:menu§7 を空中右クリック -> メニュー(start/stop/reset)",
+    "§7(1) 操作時計(ROBW:menu)をブロック右クリック -> メニュー",
     "§7(2) 骨で捕獲 -> 納品チェストに入れる",
-    "§7(3) §f/function robw/start §7など(チートON)",
-    "§7(4) §f/scriptevent robw:stop",
+    "§7(3) §f/scriptevent robw:start run §7(チートON・推奨)",
+    "§7(4) §f/function robw/start §7(ワールドにパック適用時)",
   ];
   if (chatHandlerMode === "none") {
     lines.push("§c(注) !robw は Beta APIs 実験的機能が必要です");
@@ -2236,52 +2829,159 @@ function getRobwHelpLines() {
 
 let addonReadyDone = false;
 
-function onAddonReady() {
-  if (addonReadyDone) return;
-  addonReadyDone = true;
-
-  try {
-    getObjective();
-    clearRemainingTimeHud();
-    registerGameEvents();
-    startDaytimeLockLoop();
-    logInfo("Return of BoxWorld addon loaded (state: waiting)");
-    logInfo(
-      `box gate: (${CONFIG.BOX_GATE.x}, ${CONFIG.BOX_GATE.y}, ${CONFIG.BOX_GATE.z}) r=${CONFIG.BOX_GATE.radius}`
-    );
-    for (const line of getRobwHelpLines()) {
-      broadcast(line);
+function ensureStarterWandsForAllPlayers() {
+  ensureSessionHostAssigned();
+  for (const player of world.getPlayers()) {
+    if (shouldResetToLobbyInventory()) {
+      resetPlayerToLobbyInventory(player);
     }
-    for (const player of world.getPlayers()) {
+    if (isSessionHost(player)) {
       giveStarterWand(player);
+      scheduleStarterWandRetries(player);
+    } else {
+      removeRobwWandsFromPlayer(player);
     }
-  } catch (error) {
-    addonReadyDone = false;
-    logError(`startup failed: ${error}`);
   }
+}
+
+function announceRobwReady() {
+  console.warn("[ROBW] announceRobwReady");
+  try {
+    robwBroadcast("§a[ROBW] 準備OK");
+  } catch (error) {
+    console.warn(`[ROBW] broadcast failed: ${error}`);
+  }
+
+  ensureSessionHostAssigned();
+  for (const player of world.getPlayers()) {
+    try {
+      robwPlayerMessage(player, "§a[ROBW] 準備OK");
+      if (isSessionHost(player)) {
+        robwPlayerMessage(player, "§7あなたは§6ホスト§7です。操作時計でゲートを起動できます。");
+      } else {
+        robwPlayerMessage(player, "§7あなたは§f参加者§7です。ゲートの起動はホストが行います。");
+      }
+      if (shouldResetToLobbyInventory()) {
+        resetPlayerToLobbyInventory(player);
+      }
+      if (isSessionHost(player)) {
+        giveStarterWand(player);
+        scheduleStarterWandRetries(player);
+      } else {
+        removeRobwWandsFromPlayer(player);
+      }
+    } catch (error) {
+      console.warn(`[ROBW] player ready failed: ${error}`);
+    }
+  }
+}
+
+function onAddonReady() {
+  if (!addonReadyDone) {
+    try {
+      getObjective();
+      clearRemainingTimeHud();
+      registerGameEvents();
+      startDaytimeLockLoop();
+      startTimerHudWatchdog();
+      addonReadyDone = true;
+      logInfo("Return of BoxWorld addon loaded (state: waiting)");
+      logInfo(
+        `box gate: (${CONFIG.BOX_GATE.x}, ${CONFIG.BOX_GATE.y}, ${CONFIG.BOX_GATE.z}) r=${CONFIG.BOX_GATE.radius}`
+      );
+      for (const line of getRobwHelpLines()) {
+        try {
+          robwBroadcast(line);
+        } catch {
+          // ignore
+        }
+      }
+    } catch (error) {
+      logError(`startup failed: ${error}`);
+      try {
+        robwBroadcast(`§c[ROBW] 起動エラー: ${error}`);
+      } catch {
+        // ignore
+      }
+      try {
+        registerGameEvents();
+      } catch (registerError) {
+        logError(`registerGameEvents after startup error: ${registerError}`);
+      }
+    }
+  }
+
+  ensureStarterWandsForAllPlayers();
 }
 
 function scheduleAddonReady() {
   system.run(() => onAddonReady());
 }
 
-// worldLoad はスクリプトより先に発火することがあるため、即時実行も行う
-scheduleAddonReady();
-system.runTimeout(scheduleAddonReady, 40);
+function bootstrapRobwScript() {
+  console.warn("[ROBW] bootstrap");
+  try {
+    registerRobwItemComponents();
+  } catch (error) {
+    console.warn(`[ROBW] bootstrap startup: ${error}`);
+  }
+  try {
+    registerGameEvents();
+  } catch (error) {
+    console.warn(`[ROBW] bootstrap registerGameEvents: ${error}`);
+  }
+  scheduleAddonReady();
+  system.runTimeout(scheduleAddonReady, 40);
+  system.runTimeout(scheduleAddonReady, 100);
+}
+
+bootstrapRobwScript();
 
 if (world.afterEvents?.worldLoad) {
   world.afterEvents.worldLoad.subscribe(() => scheduleAddonReady());
 }
 
 world.afterEvents.playerSpawn.subscribe((event) => {
-  if (!event.initialSpawn) return;
   scheduleAddonReady();
   system.run(() => {
     const player = event.player;
     if (!player) return;
-    for (const line of getRobwHelpLines()) {
-      player.sendMessage(line);
+
+    const wasHostless = !sessionHostPlayerId;
+    ensureSessionHostAssigned();
+
+    if (event.initialSpawn) {
+      for (const line of getRobwHelpLines()) {
+        robwPlayerMessage(player, line);
+      }
+      if (isSessionHost(player)) {
+        if (wasHostless) {
+          robwPlayerMessage(player, "§7あなたは§6ホスト§7です。操作時計でゲートを起動できます。");
+        }
+      } else {
+        const host = getSessionHost();
+        robwPlayerMessage(
+          player,
+          `§7あなたは§f参加者§7です。ホスト: §6${host?.name ?? "?"}`
+        );
+      }
     }
-    giveStarterWand(player);
+
+    if (shouldResetToLobbyInventory()) {
+      resetPlayerToLobbyInventory(player);
+    }
+    if (isSessionHost(player)) {
+      giveStarterWand(player);
+      scheduleStarterWandRetries(player);
+    } else {
+      removeRobwWandsFromPlayer(player);
+    }
   });
 });
+
+if (world.afterEvents?.playerLeave) {
+  world.afterEvents.playerLeave.subscribe((event) => {
+    const player = event.player;
+    if (player) onSessionHostLeft(player);
+  });
+}

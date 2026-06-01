@@ -8,6 +8,7 @@
 - ゲーム仕様・配信向け文言の変更は README と `main.js` のコメントを揃え、**`npm run sync:project-docs`** で `docs/project-sync.md` のゲーム内ルール（`<!-- sync:auto:game-rules -->`）を更新する。
 - **CONFIG の意味を変えたら** `docs/config-reference.md` も日本語説明を同期する。
 - ボックスゲート（`CONFIG.BOX_GATE`）は未起動時のフォールバック。**start は起動者の立ち位置**がラウンド中心（地面に立っている必要あり）
+- 開発中のワールド反映: `npm run watch:bedrock-world-pack`（`behavior_packs/robw_behavior` 保存で `sync:bedrock-world-pack` 相当を自動実行）
 
 ## このプロジェクトについて
 

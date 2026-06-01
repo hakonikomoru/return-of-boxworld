@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "minecraft-js",
+      "request": "attach",
+      "name": "Minecraft: attach (ROBW)",
+      "mode": "connect",
+      "localRoot": "${workspaceFolder}/behavior_packs/robw_behavior",
+      "port": 19144
+    }
+  ]
+}

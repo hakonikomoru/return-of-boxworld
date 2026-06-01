@@ -1,0 +1,53 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Bedrock: tail content log",
+      "type": "shell",
+      "command": "node",
+      "args": ["scripts/tail-bedrock-log.mjs", "--mirror"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "bedrock-log"
+      }
+    },
+    {
+      "label": "Bedrock: watch world pack sync",
+      "type": "shell",
+      "command": "node",
+      "args": ["scripts/watch-bedrock-world-pack.mjs"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "bedrock-dev"
+      }
+    },
+    {
+      "label": "Bedrock: tail content log (ROBW only)",
+      "type": "shell",
+      "command": "node",
+      "args": ["scripts/tail-bedrock-log.mjs", "--mirror", "--robw"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "bedrock-log"
+      }
+    }
+  ]
+}

@@ -5,6 +5,16 @@
   "description": "Minecraft Bedrock 統合版アドオン「Return of BoxWorld」",
   "scripts": {
     "sync:project-docs": "node scripts/sync-project-docs.mjs",
-    "sync:project-docs:check": "node scripts/sync-project-docs.mjs --check"
+    "sync:project-docs:check": "node scripts/sync-project-docs.mjs --check",
+    "verify:bedrock-pack": "node scripts/verify-bedrock-pack.mjs",
+    "install:bedrock-pack": "node scripts/install-bedrock-pack.mjs",
+    "sync:bedrock-world-pack": "node scripts/sync-bedrock-world-pack.mjs",
+    "watch:bedrock-world-pack": "node scripts/watch-bedrock-world-pack.mjs",
+    "dev:bedrock": "node scripts/watch-bedrock-world-pack.mjs",
+    "tail:bedrock-log": "node scripts/tail-bedrock-log.mjs",
+    "tail:bedrock-log:robw": "node scripts/tail-bedrock-log.mjs --robw",
+    "tail:bedrock-log:mirror": "node scripts/tail-bedrock-log.mjs --mirror",
+    "tail:bedrock-log:gui": "node scripts/tail-bedrock-log.mjs --mirror --clipboard",
+    "diagnose:bedrock-log": "node scripts/diagnose-bedrock-log.mjs"
   }
 }

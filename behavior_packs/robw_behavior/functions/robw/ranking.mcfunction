@@ -1,1 +1,1 @@
-scriptevent robw:ranking
+scriptevent robw:ranking run
