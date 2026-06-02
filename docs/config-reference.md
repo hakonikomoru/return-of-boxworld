@@ -88,6 +88,7 @@
 |--------|-----|-----|----------------|
 | `POINTS_PER_BOX` | 数値（pt） | `1` | **ハコイヌの毛皮を 1 枚納品したときの得点**。 |
 | `POINTS_WRONG_ANIMAL` | 数値（pt） | `-2` | **別種の毛皮を 1 枚納品したときの減点**。マイナスなのでそのまま負の数で書く。 |
+| `POINTS_CHEST_JUNK_ITEM` | 数値（pt） | `-1` | **毛皮以外を納品チェストに入れたときの減点（1 個あたり）**。入れたものは吸収（消去）される。**操作時計・骨（`PROTECT_ITEM`）は除く**。 |
 | `POINTS_HAKOINU_KILL` | 数値（pt） | `-10` | **ラウンド中にハコイヌ（オオカミ）を倒したときの減点**（加害プレイヤーへ）。 |
 | `POINTS_HAKOINU_HIT` | 数値（pt） | `-1` | **ハコイヌへ与えたダメージ 1 回あたりの減点**（加害プレイヤーへ）。 |
 | `SCORE_OBJECTIVE` | 文字列 | `return_point` | **スコアボードの ID**。他アドオンと被る場合だけ変更。 |
@@ -121,7 +122,7 @@
 |--------|-----|-----|----------------|
 | `START_COUNTDOWN_ENABLED` | true/false | `true` | **start 時に 3・2・1 カウントダウンを出すか**。 |
 | `START_COUNTDOWN_STEP_TICKS` | 数値（tick） | `20` | **カウント 1 歩の長さ**。開始・終了演出で共通。 |
-| `END_COUNTDOWN_ENABLED` | true/false | `true` | **終了時に 3・2・1 → ゲート閉鎖の演出を出すか**。 |
+| `END_COUNTDOWN_ENABLED` | true/false | `true` | **終了時に 3・2・1 → ゲート閉鎖の演出**。時間切れ時は**残り 3・2・1 秒と同期**（その後すぐ閉鎖）。手動 stop 時は従来どおり約 4 秒の演出。 |
 
 ---
 
@@ -129,8 +130,9 @@
 
 | 設定名 | 型 | 例 | 何を決めるか |
 |--------|-----|-----|----------------|
-| `SHOW_REMAINING_TIME_HUD` | true/false | `true` | **ゲート開放中、画面右のサイドバーに常時表示**するか。表示内容: 残り時間・制限時間・納品チェスト座標・帰還ポイント（1人時は「帰還 Npt」）。オフで非表示。 |
-| `TIMER_SCORE_OBJECTIVE` | 文字列 | `robw_timer` | 表示用スコアボードの ID。他パックと衝突する場合のみ変更。 |
+| `SHOW_REMAINING_TIME_HUD` | true/false | `true` | **ゲート開放中に残り時間などを常時表示**するか。オフで非表示。 |
+| `TIMER_HUD_USE_SIDEBAR` | true/false | `true` | **true** = 画面右サイドバー（既定）。**false** = アクションバー中央下（数字なし）。 |
+| `TIMER_SCORE_OBJECTIVE` | 文字列 | `robw_timer` | `TIMER_HUD_USE_SIDEBAR: true` のときのスコアボード ID。 |
 
 表示できない環境では、画面下のアクションバーにフォールバックします。
 

@@ -129,6 +129,8 @@ const CONFIG = {
   POINTS_PER_BOX: 1,
   /** 別種毛皮 1 枚納品あたりの減点（マイナスで書く） */
   POINTS_WRONG_ANIMAL: -2,
+  /** 毛皮以外を納品チェストに入れたときの減点（1 個あたり・マイナスで書く） */
+  POINTS_CHEST_JUNK_ITEM: -1,
   /** ラウンド中にハコイヌ（オオカミ）を倒したときの減点（加害プレイヤーへ） */
   POINTS_HAKOINU_KILL: -10,
   /** ラウンド中にハコイヌへ与えたダメージ 1 回あたりの減点 */
@@ -162,11 +164,16 @@ const CONFIG = {
   START_COUNTDOWN_ENABLED: true,
   /** カウント 1 歩の長さ（tick）。20 ≒ 1 秒（開始・終了共通） */
   START_COUNTDOWN_STEP_TICKS: 20,
-  /** 終了時の 3・2・1 閉鎖演出を出すか */
+  /** 終了時の 3・2・1 閉鎖演出（時間切れ時は残り 3 秒と同期） */
   END_COUNTDOWN_ENABLED: true,
   /** 残り時間を画面に常時表示する */
   SHOW_REMAINING_TIME_HUD: true,
-  /** 残り時間表示用スコアボード ID（サイドバー＝画面右） */
+  /**
+   * true = 画面右サイドバー（既定・配置は従来どおり）
+   * false = アクションバー中央下（行右の並び用数字は出ない）
+   */
+  TIMER_HUD_USE_SIDEBAR: true,
+  /** 残り時間表示用スコアボード ID（TIMER_HUD_USE_SIDEBAR 時のみ使用） */
   TIMER_SCORE_OBJECTIVE: "robw_timer",
 };
 
@@ -215,6 +222,8 @@ let placedChestRestore = null;
 let activeRoundCenter = null;
 let startCountdownGeneration = 0;
 let endCountdownGeneration = 0;
+/** 時間切れ時、タイマー残り秒（3・2・1）ごとに演出済みか */
+let endCountdownSyncedSecsShown = new Set();
 /** @type {number | undefined} */
 let hudLoopId = undefined;
 /** @type {string | null} */
@@ -501,13 +510,6 @@ function runStartCountdown(host, validation, onComplete) {
 
 const END_COUNTDOWN_SEQUENCE = [
   {
-    title: "§6§lRETURN OF BOXWORLD",
-    subtitle: "§fゲート閉鎖準備...",
-    actionBar: "§6§oReturn of BoxWorld",
-    sound: null,
-    pitch: 1,
-  },
-  {
     title: "§e§l3",
     subtitle: "§7まもなく閉鎖",
     actionBar: "§e§l>> 3",
@@ -539,6 +541,48 @@ const END_COUNTDOWN_SEQUENCE = [
 
 function cancelEndCountdown() {
   endCountdownGeneration++;
+  endCountdownSyncedSecsShown.clear();
+}
+
+function resetEndCountdownSyncState() {
+  endCountdownSyncedSecsShown.clear();
+}
+
+const END_COUNTDOWN_CLOSE_INDEX = END_COUNTDOWN_SEQUENCE.length - 1;
+
+function showEndCountdownStep(index) {
+  const step = END_COUNTDOWN_SEQUENCE[index];
+  if (!step) return;
+
+  const stepTicks = CONFIG.START_COUNTDOWN_STEP_TICKS;
+  showCeremonyPresentation(step, stepTicks);
+
+  if (index >= 0 && index <= 2) {
+    broadcast(`§e§l  ${3 - index}  `);
+    return;
+  }
+
+  if (index !== END_COUNTDOWN_CLOSE_INDEX) return;
+
+  const center = activeRoundCenter;
+  const players = world.getPlayers();
+  const dimension = players[0]?.dimension;
+  if (dimension && center) {
+    spawnEndCeremonyBurst(dimension, center);
+  }
+  broadcast("§6§l===== ゲート閉鎖! =====");
+}
+
+/** ゲート残り時間の 3・2・1 秒と同期して終了カウントを出す（running 中のみ） */
+function tryShowTimerSyncedEndCountdown(remainingTicks) {
+  if (!CONFIG.END_COUNTDOWN_ENABLED || gameState !== "running") return;
+
+  const remainingSec = Math.ceil(remainingTicks / TICKS_PER_SECOND);
+  if (remainingSec < 1 || remainingSec > 3) return;
+  if (endCountdownSyncedSecsShown.has(remainingSec)) return;
+
+  endCountdownSyncedSecsShown.add(remainingSec);
+  showEndCountdownStep(3 - remainingSec);
 }
 
 function spawnEndCeremonyBurst(dimension, center) {
@@ -572,25 +616,13 @@ function runGameEndCountdown(onComplete) {
 
   const generation = ++endCountdownGeneration;
   const stepTicks = CONFIG.START_COUNTDOWN_STEP_TICKS;
-  const center = activeRoundCenter;
-  const players = world.getPlayers();
-  const dimension = players[0]?.dimension;
 
   for (let i = 0; i < END_COUNTDOWN_SEQUENCE.length; i++) {
-    const step = END_COUNTDOWN_SEQUENCE[i];
     system.runTimeout(() => {
       if (generation !== endCountdownGeneration || gameState !== "closing") {
         return;
       }
-      showCeremonyPresentation(step, stepTicks);
-      if (i === END_COUNTDOWN_SEQUENCE.length - 1 && dimension && center) {
-        spawnEndCeremonyBurst(dimension, center);
-      }
-      if (i >= 1 && i <= 3) {
-        broadcast(`§e§l  ${4 - i}  `);
-      } else if (i === END_COUNTDOWN_SEQUENCE.length - 1) {
-        broadcast("§6§l===== ゲート閉鎖! =====");
-      }
+      showEndCountdownStep(i);
     }, i * stepTicks);
   }
 
@@ -622,19 +654,16 @@ function finalizeGameAfterCeremony() {
   logInfo("gate closed, game finished");
 }
 
-function beginGameEndCeremony(wasManualStop) {
+/** 手動 stop 時: 3・2・1 → 閉鎖を演出時間で順に再生 */
+function beginManualGameEndCeremony() {
   if (gameState === "finished" || gameState === "closing") return;
 
   gameState = "closing";
+  resetEndCountdownSyncState();
   stopGameLoops();
   clearRemainingTimeHud();
   clearSpawnedHakoinu(activeRoundCenter, getActiveRoundDimension());
-
-  if (wasManualStop) {
-    broadcast("§eゲートを手動で閉鎖します...");
-  } else {
-    broadcast("§c§l時間切れ！§fゲートを閉鎖します...");
-  }
+  broadcast("§eゲートを手動で閉鎖します...");
 
   runGameEndCountdown(() => {
     if (gameState !== "closing") return;
@@ -642,11 +671,43 @@ function beginGameEndCeremony(wasManualStop) {
   });
 }
 
+/** 時間切れ時: 3・2・1 はタイマー残り秒に同期済み → 閉鎖のみ */
+function beginTimedGameEndFinalize() {
+  if (gameState === "finished" || gameState === "closing") return;
+
+  gameState = "closing";
+  stopGameLoops();
+  clearRemainingTimeHud();
+  clearSpawnedHakoinu(activeRoundCenter, getActiveRoundDimension());
+  broadcast("§c§l時間切れ！§fゲートを閉鎖します...");
+
+  const generation = ++endCountdownGeneration;
+  const stepTicks = CONFIG.START_COUNTDOWN_STEP_TICKS;
+
+  if (CONFIG.END_COUNTDOWN_ENABLED) {
+    showEndCountdownStep(END_COUNTDOWN_CLOSE_INDEX);
+    system.runTimeout(() => {
+      if (generation !== endCountdownGeneration || gameState !== "closing") {
+        return;
+      }
+      finalizeGameAfterCeremony();
+    }, stepTicks);
+    return;
+  }
+
+  finalizeGameAfterCeremony();
+}
+
 function requestGameEnd(wasManualStop = false) {
   if (gameState === "finished" || gameState === "closing") return;
 
-  if (gameState === "running" && CONFIG.END_COUNTDOWN_ENABLED) {
-    beginGameEndCeremony(wasManualStop);
+  if (gameState === "running" && CONFIG.END_COUNTDOWN_ENABLED && wasManualStop) {
+    beginManualGameEndCeremony();
+    return;
+  }
+
+  if (gameState === "running" && !wasManualStop) {
+    beginTimedGameEndFinalize();
     return;
   }
 
@@ -2140,6 +2201,51 @@ function hasCaptureItemsInContainer(container) {
   return counts.hakoinu > 0 || counts.wrong > 0 || counts.unified > 0;
 }
 
+/** 納品チェストで吸収・減点しない（操作時計・骨） */
+function isChestPreservedItem(itemStack) {
+  if (!itemStack) return false;
+  return (
+    isRobwWandItemType(itemStack.typeId) ||
+    itemStack.typeId === CONFIG.PROTECT_ITEM
+  );
+}
+
+function countJunkItemsInContainer(container) {
+  let count = 0;
+  if (!container) return 0;
+
+  for (let slot = 0; slot < container.size; slot++) {
+    const item = container.getItem(slot);
+    if (!item) continue;
+    if (isReturnBoxItem(item)) continue;
+    if (isChestPreservedItem(item)) continue;
+    count += item.amount;
+  }
+  return count;
+}
+
+function hasSubmissionChestItemsInContainer(container) {
+  return (
+    hasCaptureItemsInContainer(container) ||
+    countJunkItemsInContainer(container) > 0
+  );
+}
+
+function clearJunkItemsFromContainer(container) {
+  let removed = 0;
+  if (!container) return removed;
+
+  for (let slot = 0; slot < container.size; slot++) {
+    const item = container.getItem(slot);
+    if (!item) continue;
+    if (isReturnBoxItem(item)) continue;
+    if (isChestPreservedItem(item)) continue;
+    removed += item.amount;
+    container.setItem(slot, undefined);
+  }
+  return removed;
+}
+
 function clearCaptureItemsFromContainer(container) {
   const removed = { hakoinu: 0, wrong: 0, unified: 0 };
   if (!container) return removed;
@@ -2161,8 +2267,17 @@ function clearCaptureItemsFromContainer(container) {
   return removed;
 }
 
-function announceDelivery(player, returned, points, total) {
+function announceDelivery(player, returned, junkCount, points, total) {
   const wrongPenalty = returned.wrong * CONFIG.POINTS_WRONG_ANIMAL;
+  const junkPenalty = junkCount * CONFIG.POINTS_CHEST_JUNK_ITEM;
+  const furTotal = returned.hakoinu + returned.wrong;
+
+  if (junkCount > 0 && furTotal <= 0) {
+    broadcast(
+      `§c${player.name}§fが納品チェストに毛皮以外を入れてしまった！ ${formatPointsDelta(junkPenalty)} §7(合計 ${total}pt)`
+    );
+    return;
+  }
 
   if (returned.wrong > 0 && returned.hakoinu > 0) {
     broadcast(
@@ -2181,6 +2296,12 @@ function announceDelivery(player, returned, points, total) {
       `§6${player.name}§fが捕獲ハコイヌを${returned.hakoinu}匹納品しました！ ${formatPointsDelta(points)} §7(合計 ${total}pt)`
     );
   }
+
+  if (junkCount > 0) {
+    broadcast(
+      `§7${player.name}§fの納品: 毛皮以外 x${junkCount} (${formatPointsDelta(junkPenalty)})`
+    );
+  }
 }
 
 function processSubmissionChest(player) {
@@ -2197,21 +2318,31 @@ function processSubmissionChest(player) {
   }
 
   const pending = countCaptureItemsInContainer(container);
-  if (pending.hakoinu <= 0 && pending.wrong <= 0 && pending.unified <= 0) {
+  const pendingJunk = countJunkItemsInContainer(container);
+  if (
+    pending.hakoinu <= 0 &&
+    pending.wrong <= 0 &&
+    pending.unified <= 0 &&
+    pendingJunk <= 0
+  ) {
     return;
   }
 
   const cleared = clearCaptureItemsFromContainer(container);
+  const junkRemoved = clearJunkItemsFromContainer(container);
   const fromLedger = consumeReturnBoxKindsFromAnyLedger(cleared.unified);
   const returned = {
     hakoinu: cleared.hakoinu + fromLedger.hakoinu,
     wrong: cleared.wrong + fromLedger.wrong,
   };
-  if (returned.hakoinu <= 0 && returned.wrong <= 0) return;
+  if (returned.hakoinu <= 0 && returned.wrong <= 0 && junkRemoved <= 0) {
+    return;
+  }
 
   const points =
     returned.hakoinu * CONFIG.POINTS_PER_BOX +
-    returned.wrong * CONFIG.POINTS_WRONG_ANIMAL;
+    returned.wrong * CONFIG.POINTS_WRONG_ANIMAL +
+    junkRemoved * CONFIG.POINTS_CHEST_JUNK_ITEM;
   const total = addReturnPoints(player, points);
   const bonesFromHakoinu =
     returned.hakoinu * CONFIG.BONES_PER_HAKOINU_DELIVERY;
@@ -2221,10 +2352,19 @@ function processSubmissionChest(player) {
   if (bonesEarned > 0) {
     giveBones(player, bonesEarned);
   }
-  announceDelivery(player, returned, points, total);
-  robwPlayerMessage(player,
-    `§7納品した毛皮 ${returned.hakoinu + returned.wrong} 枚を消費しました。`
-  );
+  announceDelivery(player, returned, junkRemoved, points, total);
+  const furConsumed = returned.hakoinu + returned.wrong;
+  if (furConsumed > 0) {
+    robwPlayerMessage(player,
+      `§7納品した毛皮 ${furConsumed} 枚を消費しました。`
+    );
+  }
+  if (junkRemoved > 0) {
+    robwPlayerMessage(
+      player,
+      `§7納品チェストから毛皮以外 x${junkRemoved} を吸収しました。 ${formatPointsDelta(junkRemoved * CONFIG.POINTS_CHEST_JUNK_ITEM)}`
+    );
+  }
   if (returned.wrong > 0) {
     robwPlayerMessage(
       player,
@@ -2242,7 +2382,7 @@ function processSubmissionChest(player) {
     );
   }
   logInfo(
-    `${player.name} submitted hakoinu=${returned.hakoinu} wrong=${returned.wrong} (${points} pts)`
+    `${player.name} submitted hakoinu=${returned.hakoinu} wrong=${returned.wrong} junk=${junkRemoved} (${points} pts)`
   );
 }
 
@@ -2286,6 +2426,7 @@ function resetTimerState() {
   gameEndWallMs = 0;
   nextTimeNotifyWallMs = 0;
   announcedMilestones = new Set();
+  resetEndCountdownSyncState();
 }
 
 /** 残り tick（実時間。マイクラポーズ中も Date.now() で進む） */
@@ -2450,9 +2591,64 @@ function formatPlayerPointsHudLine(player, solo) {
   return `§7${player.name} §e${pts}pt`;
 }
 
-function formatPlayerHudActionBar(player, remainingLineText, limitLineText) {
-  const pts = getPlayerReturnPoints(player);
-  return `${remainingLineText} §7| ${limitLineText} §7| §f帰還 §e${pts}pt §7| ${formatChestHudLine()}`;
+/** アクションバー用（サイドバー右の並び用数字を出さない） */
+function formatHudActionBarForPlayer(viewer, remainingLineText, limitLineText) {
+  const segments = [remainingLineText, limitLineText, formatChestHudLine()];
+  const players = world.getPlayers().filter((p) => p?.isValid);
+
+  if (players.length <= 1) {
+    segments.push(`§f帰還 §e${getPlayerReturnPoints(viewer)}pt`);
+  } else {
+    for (const player of players) {
+      segments.push(`§7${player.name} §e${getPlayerReturnPoints(player)}pt`);
+    }
+  }
+
+  return segments.join(" §7| ");
+}
+
+function clearTimerSidebarHudLines() {
+  try {
+    const board = world.scoreboard;
+    const objective = board.getObjective(CONFIG.TIMER_SCORE_OBJECTIVE);
+    if (objective) {
+      if (timerHudRemainingName) {
+        removeTimerFakePlayer(objective, timerHudRemainingName);
+      }
+      if (timerHudLimitName) {
+        removeTimerFakePlayer(objective, timerHudLimitName);
+      }
+      if (timerHudChestName) {
+        removeTimerFakePlayer(objective, timerHudChestName);
+      }
+      for (const name of timerHudPlayerPointNames.values()) {
+        removeTimerFakePlayer(objective, name);
+      }
+      timerHudPlayerPointNames.clear();
+      clearTimerSidebarParticipants();
+    }
+    if (typeof board.clearObjectiveAtDisplaySlot === "function") {
+      board.clearObjectiveAtDisplaySlot(DisplaySlotId.Sidebar);
+    }
+  } catch {
+    // ignore
+  }
+  timerHudRemainingName = null;
+  timerHudLimitName = null;
+  timerHudChestName = null;
+}
+
+function applyTimerHudActionBar(remainingLineText, limitLineText) {
+  for (const player of world.getPlayers()) {
+    if (!player?.isValid) continue;
+    try {
+      player.onScreenDisplay?.setActionBar(
+        formatHudActionBarForPlayer(player, remainingLineText, limitLineText)
+      );
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function updateTimerSidebarLine(objective, previousName, lineText, score) {
@@ -2528,20 +2724,24 @@ function updateRemainingTimeHud(remainingTicks) {
 
   const remainingText = formatRemainingTimeHudText(remainingTicks);
   const limitText = formatLimitTimeHudText();
-  const sidebarOk = updateTimerSidebar(remainingText, limitText);
 
-  if (!sidebarOk) {
-    for (const player of world.getPlayers()) {
-      if (!player?.isValid) continue;
-      try {
-        player.onScreenDisplay?.setActionBar(
-          formatPlayerHudActionBar(player, remainingText, limitText)
-        );
-      } catch {
-        // ignore
+  if (CONFIG.TIMER_HUD_USE_SIDEBAR) {
+    const sidebarOk = updateTimerSidebar(remainingText, limitText);
+    if (sidebarOk) {
+      for (const player of world.getPlayers()) {
+        if (!player?.isValid) continue;
+        try {
+          player.onScreenDisplay?.setActionBar("");
+        } catch {
+          // ignore
+        }
       }
+      return;
     }
   }
+
+  clearTimerSidebarHudLines();
+  applyTimerHudActionBar(remainingText, limitText);
 }
 
 function refreshRemainingTimeHud() {
@@ -2558,7 +2758,11 @@ function startRemainingTimeHudLoop() {
 
   stopRemainingTimeHudLoop();
   timerHudActive = true;
-  setupTimerSidebar();
+  if (CONFIG.TIMER_HUD_USE_SIDEBAR) {
+    setupTimerSidebar();
+  } else {
+    clearTimerSidebarHudLines();
+  }
   refreshRemainingTimeHud();
   hudLoopId = system.runInterval(refreshRemainingTimeHud, 10);
 }
@@ -2601,6 +2805,7 @@ function tickGameTimer() {
     return;
   }
 
+  tryShowTimerSyncedEndCountdown(remaining);
   notifyMilestones(remaining);
   if (timerHudActive) {
     updateRemainingTimeHud(remaining);
@@ -2656,7 +2861,7 @@ function beginGameRound(host, validation) {
   submissionLoopId = system.runInterval(() => {
     if (gameState !== "running") return;
     const container = getSubmissionChestContainer();
-    if (!container || !hasCaptureItemsInContainer(container)) return;
+    if (!container || !hasSubmissionChestItemsInContainer(container)) return;
     if (!lastSubmissionPlayer?.isValid) return;
     if (system.currentTick - lastSubmissionTick > SUBMISSION_CREDIT_WINDOW_TICKS) {
       return;
