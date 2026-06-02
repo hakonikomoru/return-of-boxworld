@@ -45,7 +45,7 @@ Minecraft **統合版（Bedrock Edition）** 向け Script API アドオン **Re
 1. **ホスト**が地面に立ってゲートを起動（操作時計 `ROBW:menu` → メニューで start）  
    → 起動位置に **ボックスゲート用のチェスト** が1つ設置され、骨が配布され、犬たちが周囲に出現
 2. **骨**で近くの犬たちを **保護** → どちらも同じ見た目の **帰還ボックス**（正体は帰還して初めてわかる）
-3. 帰還ボックスを **ボックスゲート（チェスト）** に入れる → 正解 **+1pt** / 別種 **-3pt**
+3. 帰還ボックスを **ボックスゲート（チェスト）** に入れる → 正解 **+1pt** / 別種 **-2pt** / ハコイヌ攻撃 **-1pt/回** / 倒す **-10pt**
 4. 時間切れまたは stop で閉鎖 → ランキング表示
 
 ### アイテム（暫定）
@@ -148,6 +148,19 @@ node scripts/watch-bedrock-world-pack.mjs
 | `install:bedrock-pack` | 開発用ジャンクション |
 
 PowerShell で `npm` が拒否される場合は `npm.cmd` または `node scripts/...` を使用。
+
+### テスト・リンター
+
+初回のみ `npm install`（`package-lock.json` あり）。
+
+| コマンド | 内容 |
+|----------|------|
+| `npm test` | Node 組み込みテスト（`tests/`・CONFIG 解析・重複関数チェックなど） |
+| `npm run lint` | ESLint（`scripts/`・`behavior_packs/.../scripts/`） |
+| `npm run lint:fix` | ESLint 自動修正 |
+| `npm run test:ci` | テスト + lint + ドキュメント同期チェック + パック検証 |
+
+GitHub Actions（`.github/workflows/ci.yml`）でも `push` / PR 時に同様のチェックを実行します。
 
 ### パックの説明文・名前・アイコンが変わらないとき
 

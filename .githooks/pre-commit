@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+if command -v npm >/dev/null 2>&1; then
+  npm test
+  npm run lint
+fi
+
 node scripts/sync-project-docs.mjs 2>/dev/null || true
 
 if git diff --quiet -- docs/project-sync.md 2>/dev/null; then

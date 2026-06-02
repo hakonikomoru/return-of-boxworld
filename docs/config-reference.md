@@ -23,6 +23,7 @@
 |--------|-----|-----|----------------|
 | `PROTECTION_RADIUS` | 数値（ブロック） | `4` | **骨で右クリックしたとき、どれだけ近くの動物を対象にするか**。大きいほど遠くのオオカミ／牛なども捕獲できる。 |
 | `PROTECT_ITEM` | アイテム ID | `minecraft:bone` | **捕獲に使うアイテム**。通常は骨のまま変更不要。 |
+| `BONES_PER_CAPTURE` | 数値（個） | `1` | **捕獲 1 回で消費する骨**。`0` で消費なし。 |
 
 ---
 
@@ -35,7 +36,10 @@
 |--------|-----|-----|----------------|
 | `BOX_GATE` | オブジェクト | `{ x, y, z, radius }` | **ラウンド中心のフォールバック座標**。`x,z` はブロック座標、`y` は足元の高さの目安、`radius` はスポーン範囲の参考値。 |
 | `SUBMISSION_CHEST` | オブジェクト | `{ x, y, z }` | **納品チェストのフォールバック座標**。通常は起動者の足元に自動設置されるため、テスト用以外はあまり触らない。 |
-| `CHEST_CLEANUP_RADIUS` | 数値（ブロック） | `6` | **start 時に、足元付近の既存チェスト・樽などを消す範囲**。納品用チェストを 1 つだけにするため。 |
+| `CHEST_CLEANUP_RADIUS` | 数値（ブロック） | `12` | **start 時に、足元付近の既存チェスト・樽などを消す水平半径**。 |
+| `CHEST_CLEANUP_VERTICAL_RANGE` | 数値（ブロック） | `10` | **地面から上下に探して撤去する高さ**。 |
+| `ROUND_ITEM_CLEANUP_RADIUS` | 数値（ブロック） | `0` | **落とし物を消す半径**。`0` でスポーン範囲に合わせる（おおよそ 70）。 |
+| `DROPPED_ITEM_ENTITY_TYPES` | ID の配列 | `minecraft:item` | **消す落とし物エンティティ**。 |
 | `SUBMISSION_CHEST_BLOCK_TYPES` | ID の配列 | チェスト等 | **「既存の収納ブロック」として撤去するブロック種類**。通常は変更不要。 |
 | `GATE_SUMMON_OFFSET_Y` | 数値 | `0` | **互換用（現在ほぼ未使用）**。テレポート廃止に伴い予約。 |
 
@@ -46,11 +50,22 @@
 | 設定名 | 型 | 例 | 何を決めるか |
 |--------|-----|-----|----------------|
 | `START_GIVE_BONES` | 数値（個） | `12` | **ラウンド開始時に全員へ渡す骨の数**。いったん所持分を消してからこの数で配る。 |
-| `BONES_PER_HAKOINU_DELIVERY` | 数値（個/匹） | `4` | **ハコイヌの毛皮を納品チェストに入れたとき、1 匹あたりもらえる骨**。別種納品では増えない。大きいほど捕獲しやすい。 |
-| `START_SPAWN_HAKOINU` | 数値（匹） | `72` | **出現するオオカミの数**。広い範囲なら多すぎると重い。 |
-| `START_SPAWN_PENALTY_ANIMALS` | 数値（匹） | `28` | **出現する別種の数**。 |
-| `SPAWN_MIN_DISTANCE` | 数値（ブロック） | `10` | **チェスト付近を空ける**最短距離。 |
-| `SPAWN_MAX_DISTANCE` | 数値（ブロック） | `56` | **探索の最遠距離**の目安。`GATE_OPEN_MINUTES: 5` なら 48〜64 前後が目安。 |
+| `BONES_PER_HAKOINU_DELIVERY` | 数値（個/枚） | `2` | **ハコイヌの毛皮を納品したとき、1 枚あたりもらえる骨**。 |
+| `BONES_PER_WRONG_ANIMAL_DELIVERY` | 数値（個/枚） | `4` | **別種の毛皮を納品したとき、1 枚あたりもらえる骨**。 |
+| `START_SPAWN_HAKOINU` | 数値（匹） | `90` | **出現させるオオカミの目標数**（地形で失敗する分は `SPAWN_ATTEMPTS_PER_ENTITY` で再試行）。Switch 等で重いときは `70` 前後。 |
+| `START_SPAWN_PENALTY_ANIMALS` | 数値（匹） | `20` | **出現する別種の数**。 |
+| `SPAWN_ATTEMPTS_PER_ENTITY` | 数値（回） | `8` | **1 匹あたりのスポーン試行回数**（高さを変えて複数座標を試す）。 |
+| `SPAWN_MIN_DISTANCE` | 数値（ブロック） | `6` | **チェスト付近を空ける**最短距離。 |
+| `SPAWN_MAX_DISTANCE` | 数値（ブロック） | `40` | **探索の最遠距離**の目安。狭めにすると遭遇しやすい。 |
+| `SPAWN_REPLENISH_ENABLED` | 真偽 | `true` | **ラウンド中に減った分を目標数まで補充**するか。 |
+| `SPAWN_REPLENISH_INTERVAL_SECONDS` | 数値（秒） | `4` | **補充チェックの間隔**。短いほどすぐ戻るが負荷増。 |
+| `SPAWN_REPLENISH_MAX_PER_CHECK` | 数値（匹） | `6` | **1 回のチェックで増やす上限**（ハコイヌ＋別種の合計）。 |
+| `SPAWN_NEAR_PLAYERS` | 真偽 | `true` | **プレイヤー付近に湧かせる**（false ならゲート中心のみ）。 |
+| `SPAWN_NEAR_PLAYER_MIN_DISTANCE` | 数値（ブロック） | `8` | プレイヤー足元を空ける最短距離。 |
+| `SPAWN_NEAR_PLAYER_MAX_DISTANCE` | 数値（ブロック） | `18` | プレイヤーから湧く最遠距離（歩いてすぐ会える範囲）。 |
+| `SPAWN_MIN_NEAR_PLAYER` | 数値（匹） | `4` | **各プレイヤー周辺に最低キープする動物数**（ハコイヌ＋別種）。 |
+| `SPAWN_ON_CAPTURE_ENABLED` | 真偽 | `true` | **捕獲直後**にそのプレイヤー付近へ即スポーン。 |
+| `SPAWN_ON_CAPTURE_COUNT` | 数値（匹） | `1` | 捕獲 1 回あたりに近くへ出すハコイヌ数。 |
 
 ---
 
@@ -72,7 +87,9 @@
 | 設定名 | 型 | 例 | 何を決めるか |
 |--------|-----|-----|----------------|
 | `POINTS_PER_BOX` | 数値（pt） | `1` | **ハコイヌの毛皮を 1 枚納品したときの得点**。 |
-| `POINTS_WRONG_ANIMAL` | 数値（pt） | `-3` | **別種の毛皮を 1 枚納品したときの減点**。マイナスなのでそのまま負の数で書く。 |
+| `POINTS_WRONG_ANIMAL` | 数値（pt） | `-2` | **別種の毛皮を 1 枚納品したときの減点**。マイナスなのでそのまま負の数で書く。 |
+| `POINTS_HAKOINU_KILL` | 数値（pt） | `-10` | **ラウンド中にハコイヌ（オオカミ）を倒したときの減点**（加害プレイヤーへ）。 |
+| `POINTS_HAKOINU_HIT` | 数値（pt） | `-1` | **ハコイヌへ与えたダメージ 1 回あたりの減点**（加害プレイヤーへ）。 |
 | `SCORE_OBJECTIVE` | 文字列 | `return_point` | **スコアボードの ID**。他アドオンと被る場合だけ変更。 |
 
 ---
@@ -126,8 +143,11 @@
 | もっと短い 1 試合 | `GATE_OPEN_MINUTES` を `3` など |
 | もっと広いマップにしたい | `SPAWN_MAX_DISTANCE` を `64`〜`80`（5 分なら 72 程度まで） |
 | もっと狭く密集させたい | `SPAWN_MAX_DISTANCE` を `32`、匹数を増やす |
-| 納品で骨がたくさんもらえる | `BONES_PER_HAKOINU_DELIVERY` を `5` など |
-| 誤捕獲を厳しく | `POINTS_WRONG_ANIMAL` を `-5` など |
+| 捕獲後も常にウルフがいる感じ | `SPAWN_MIN_NEAR_PLAYER` を `6`、`SPAWN_ON_CAPTURE_COUNT` を `2` |
+| 補充で重い | `START_SPAWN_HAKOINU` を `70`、`SPAWN_REPLENISH_MAX_PER_CHECK` を `4`、または `SPAWN_REPLENISH_ENABLED: false` |
+| 納品で骨がたくさんもらえる | `BONES_PER_HAKOINU_DELIVERY` を `3` など |
+| 誤捕獲を厳しく | `POINTS_WRONG_ANIMAL` を `-3` など |
+| 倒すと厳しく | `POINTS_HAKOINU_KILL` を `-15` など |
 | カウントダウンを速く | `START_COUNTDOWN_STEP_TICKS` を `10` など |
 | 夜のままにしたい | `LOCK_DAYTIME: false` |
 

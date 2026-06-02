@@ -3,7 +3,7 @@
 > ChatGPT / 他 AI 向けの同期用ドキュメント。実装前に読むこと。
 
 <!-- sync:auto:meta:start -->
-最終更新の想定リポジトリ: `hakonikomoru/return-of-boxworld`（`main`・`unknown`・2026-06-01・`npm run sync:project-docs` 自動反映）
+最終更新の想定リポジトリ: `hakonikomoru/return-of-boxworld`（`main`・`unknown`・2026-06-02・`npm run sync:project-docs` 自動反映）
 <!-- sync:auto:meta:end -->
 
 ---
@@ -34,6 +34,7 @@ return-of-boxworld/
 │       ├── functions/
 │       ├── items/
 │       ├── manifest.json
+│       ├── pack_icon.png
 │       └── scripts/
 ├── docs/
 │   ├── bedrock-dev-notes.md
@@ -44,11 +45,13 @@ return-of-boxworld/
 │   ├── install-bedrock-pack.mjs
 │   ├── install-bedrock-pack.ps1
 │   ├── project-sync-core.mjs
+│   ├── sync-bedrock-world-pack-lib.mjs
 │   ├── sync-bedrock-world-pack.mjs
 │   ├── sync-bedrock-world-pack.ps1
 │   ├── sync-project-docs.mjs
 │   ├── tail-bedrock-log.mjs
-│   └── verify-bedrock-pack.mjs
+│   ├── verify-bedrock-pack.mjs
+│   └── watch-bedrock-world-pack.mjs
 ```
 <!-- sync:auto:directory-tree:end -->
 
@@ -78,15 +81,15 @@ return-of-boxworld/
 - **start したプレイヤーの位置**でラウンド開始（テレポートなし・**3・2・1 カウントダウン**のあと本編）
 - **地面に立った状態**でのみ起動可（空中・飛行中はエラー）
 - **骨 ×12** を全員に配布（所持分はいったん消してからセット）
-- ハコイヌを納品チェストに入れると **骨 ×4 / 匹** を追加（別種納品では増えない）
-- **ハコイヌ 72 匹** と **別種 28 匹**（ランダム種）をラウンド中心 **10〜56 ブロック** にランダム配置
-- **納品チェスト**を起動者の **足元** に **1 つだけ** 設置（半径 6 内の既存チェスト類は撤去）
+- ハコイヌ納品で **骨 ×2 / 枚**、別種納品で **骨 ×4 / 枚** を追加
+- **ハコイヌ 90 匹** と **別種 20 匹**（ランダム種）をラウンド中心 **6〜40 ブロック** にランダム配置
+- **納品チェスト**を起動者の **足元** に **1 つだけ** 設置（半径 12・高さ ±10 内の既存チェスト類は撤去）
 - 終了・リセット時にスクリプトが出した動物と納品チェストは片付けられる
 
 ### プレイの流れ
 
 1. **地面に立って** start（起動者の位置がラウンド中心）
-2. **minecraft:bone** を持ち、**4 ブロック以内**の動物を **空中で右クリック**（捕獲）
+2. **minecraft:bone** を持ち、**4 ブロック以内**の動物を **空中で右クリック**（捕獲・**骨 ×1 消費**）
 3. 骨で捕獲 → どちらも **捕獲した毛皮**（同じ見た目。正解は納品時に +pt / 別種は -pt）
 4. 捕獲アイテムを **自動設置の納品チェスト（1つ）** に入れる → 得点加算のあと **毛皮はチェストから消える**
 5. 時間切れまたは stop で閉鎖 → ランキング
@@ -96,7 +99,9 @@ return-of-boxworld/
 | 内容 | 点数 |
 |------|------|
 | ハコイヌを納品チェストに入れる | **+1 pt** / 匹分 |
-| 別種の動物を納品チェストに入れる | **-3 pt** / 匹分 |
+| 別種の動物を納品チェストに入れる | **-2 pt** / 匹分 |
+| ハコイヌ（オオカミ）を倒す | **-10 pt** / 1 匹 |
+| ハコイヌ（オオカミ）を攻撃する | **-1 pt** / 1 回のダメージ |
 
 ペナルティ対象の動物:
 

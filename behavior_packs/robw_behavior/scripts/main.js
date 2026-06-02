@@ -43,7 +43,13 @@ const CONFIG = {
     z: 0,
   },
   /** start 時に、開始位置付近の既存チェスト類を撤去する半径（ブロック） */
-  CHEST_CLEANUP_RADIUS: 6,
+  CHEST_CLEANUP_RADIUS: 12,
+  /** start 時のチェスト撤去：足元（地面）から上下に探す高さ（ブロック） */
+  CHEST_CLEANUP_VERTICAL_RANGE: 10,
+  /** 落とし物（アイテムエンティティ）を消す半径。0 でスポーン範囲に合わせる */
+  ROUND_ITEM_CLEANUP_RADIUS: 0,
+  /** 撤去する落とし物エンティティの typeId */
+  DROPPED_ITEM_ENTITY_TYPES: ["minecraft:item"],
   /** 撤去対象とする収納ブロック（通常は変更不要） */
   SUBMISSION_CHEST_BLOCK_TYPES: [
     "minecraft:chest",
@@ -54,16 +60,40 @@ const CONFIG = {
   GATE_SUMMON_OFFSET_Y: 0,
   /** ラウンド開始時に全員へ渡す骨の数（所持分はいったん消してから配布） */
   START_GIVE_BONES: 12,
-  /** ハコイヌ納品 1 匹あたりの骨ボーナス（別種納品では増えない） */
-  BONES_PER_HAKOINU_DELIVERY: 4,
-  /** 出現するオオカミ（ハコイヌ）の匹数（広域にばらす。5 分ラウンド向け） */
-  START_SPAWN_HAKOINU: 72,
+  /** ハコイヌ納品 1 枚あたりの骨ボーナス */
+  BONES_PER_HAKOINU_DELIVERY: 2,
+  /** 別種納品 1 枚あたりの骨ボーナス */
+  BONES_PER_WRONG_ANIMAL_DELIVERY: 4,
+  /** 捕獲 1 回で消費する骨の数 */
+  BONES_PER_CAPTURE: 1,
+  /** 出現するオオカミ（ハコイヌ）の匹数（5 分ラウンド向け。Switch 等は 70〜80 程度） */
+  START_SPAWN_HAKOINU: 90,
   /** 出現する別種動物の匹数（PENALTY_ANIMAL_TYPES からランダム） */
-  START_SPAWN_PENALTY_ANIMALS: 28,
+  START_SPAWN_PENALTY_ANIMALS: 20,
+  /** 1 匹あたりのスポーン試行回数（地形で失敗しやすいとき用） */
+  SPAWN_ATTEMPTS_PER_ENTITY: 8,
   /** スポーン位置：中心（チェスト）からの最短距離。足元を空ける */
-  SPAWN_MIN_DISTANCE: 10,
-  /** スポーン位置：中心からの最長距離。5 分で往復しやすい広さの目安（ブロック） */
-  SPAWN_MAX_DISTANCE: 56,
+  SPAWN_MIN_DISTANCE: 6,
+  /** スポーン位置：中心からの最長距離。狭いほど遭遇密度アップ（ブロック） */
+  SPAWN_MAX_DISTANCE: 40,
+  /** ラウンド中、捕獲などで減ったとき目標数（START_SPAWN_*）まで補充する */
+  SPAWN_REPLENISH_ENABLED: true,
+  /** 補充チェックの間隔（秒） */
+  SPAWN_REPLENISH_INTERVAL_SECONDS: 4,
+  /** 1 回のチェックで新規スポーンする上限（ハコイヌ＋別種の合計。負荷対策） */
+  SPAWN_REPLENISH_MAX_PER_CHECK: 6,
+  /** 補充・再出現をプレイヤー付近に寄せる（false ならゲート中心のみ） */
+  SPAWN_NEAR_PLAYERS: true,
+  /** プレイヤーからの最短距離（その場に被らない） */
+  SPAWN_NEAR_PLAYER_MIN_DISTANCE: 8,
+  /** プレイヤーからの最長距離（歩いてすぐ会える範囲） */
+  SPAWN_NEAR_PLAYER_MAX_DISTANCE: 18,
+  /** 各プレイヤーの周辺に最低キープしたい動物数（ハコイヌ＋別種） */
+  SPAWN_MIN_NEAR_PLAYER: 4,
+  /** 捕獲直後、そのプレイヤー付近に即スポーンする */
+  SPAWN_ON_CAPTURE_ENABLED: true,
+  /** 捕獲 1 回あたりに近くへ出すハコイヌの匹数 */
+  SPAWN_ON_CAPTURE_COUNT: 1,
   /** 捕獲に使うアイテム ID */
   PROTECT_ITEM: "minecraft:bone",
   /** 捕獲アイテムの見た目（茶色の毛皮） */
@@ -98,7 +128,11 @@ const CONFIG = {
   /** ハコイヌ毛皮 1 枚納品あたりの得点 */
   POINTS_PER_BOX: 1,
   /** 別種毛皮 1 枚納品あたりの減点（マイナスで書く） */
-  POINTS_WRONG_ANIMAL: -3,
+  POINTS_WRONG_ANIMAL: -2,
+  /** ラウンド中にハコイヌ（オオカミ）を倒したときの減点（加害プレイヤーへ） */
+  POINTS_HAKOINU_KILL: -10,
+  /** ラウンド中にハコイヌへ与えたダメージ 1 回あたりの減点 */
+  POINTS_HAKOINU_HIT: -1,
   /** スコアボードの objective ID */
   SCORE_OBJECTIVE: "return_point",
   /** チャットコマンドの接頭辞（例: !robw start） */
@@ -109,6 +143,8 @@ const CONFIG = {
   WAND_ITEM_CUSTOM: "robw:control",
   /** 配布する時計の名前（右クリックで操作メニュー） */
   WAND_MENU_NAME: "ROBW:menu",
+  /** 旧名（normalize で ROBW:menu に直す） */
+  WAND_LEGACY_MENU_NAMES: ["ROBW:start"],
   WAND_NAMES: {
     "ROBW:menu": "menu",
     "ROBW:start": "menu",
@@ -166,6 +202,8 @@ let announcedMilestones = new Set();
 let gameLoopId = undefined;
 /** @type {number | undefined} */
 let submissionLoopId = undefined;
+/** @type {number | undefined} */
+let spawnReplenishLoopId = undefined;
 /** @type {import("@minecraft/server").Player | null} */
 let lastSubmissionPlayer = null;
 let lastSubmissionTick = 0;
@@ -568,7 +606,9 @@ function runGameEndCountdown(onComplete) {
 function finalizeGameAfterCeremony() {
   gameState = "finished";
   clearRemainingTimeHud();
-  clearSpawnedHakoinu();
+  const center = activeRoundCenter;
+  const dimension = getActiveRoundDimension();
+  clearSpawnedHakoinu(center, dimension);
   activeRoundCenter = null;
 
   const players = world.getPlayers();
@@ -588,6 +628,7 @@ function beginGameEndCeremony(wasManualStop) {
   gameState = "closing";
   stopGameLoops();
   clearRemainingTimeHud();
+  clearSpawnedHakoinu(activeRoundCenter, getActiveRoundDimension());
 
   if (wasManualStop) {
     broadcast("§eゲートを手動で閉鎖します...");
@@ -835,23 +876,121 @@ function giveReturnBox(player, amount = 1, kind = "hakoinu") {
 // ハコイヌ
 // ---------------------------------------------------------------------------
 
-/** @type {import("@minecraft/server").Entity[]} */
-let spawnedRoundEntities = [];
+/** @type {string[]} */
+let spawnedRoundEntityIds = [];
+/** script 捕獲で remove した ID（entityDie と二重処理しない） @type {Set<string>} */
+const scriptRemovedRoundEntityIds = new Set();
+
+function resolveSpawnedRoundEntity(entityId) {
+  if (!entityId) return null;
+  try {
+    const entity = world.getEntity(entityId);
+    if (!entity?.isValid) return null;
+    return entity;
+  } catch {
+    return null;
+  }
+}
 
 function clearSpawnedRoundEntities() {
-  for (const entity of spawnedRoundEntities) {
+  for (const entityId of spawnedRoundEntityIds) {
     try {
-      if (entity?.isValid) entity.remove();
+      resolveSpawnedRoundEntity(entityId)?.remove();
     } catch {
       // 既に消えている場合は無視
     }
   }
-  spawnedRoundEntities = [];
+  spawnedRoundEntityIds = [];
+  scriptRemovedRoundEntityIds.clear();
+}
+
+function getEndHakoinuCleanupRadius() {
+  return (
+    CONFIG.SPAWN_MAX_DISTANCE +
+    (CONFIG.SPAWN_NEAR_PLAYER_MAX_DISTANCE ?? 18) +
+    12
+  );
+}
+
+function getRoundItemCleanupRadius() {
+  const configured = CONFIG.ROUND_ITEM_CLEANUP_RADIUS ?? 0;
+  if (configured > 0) return configured;
+  return getEndHakoinuCleanupRadius();
+}
+
+/** ラウンド中心周辺の落とし物（アイテムエンティティ）を消す */
+function clearDroppedItemsNearRoundCenter(center, dimension) {
+  const gate = center ?? activeRoundCenter ?? CONFIG.BOX_GATE;
+  const dim = dimension ?? getActiveRoundDimension();
+  if (!dim) return 0;
+
+  const radius = getRoundItemCleanupRadius();
+  const location = { x: gate.x + 0.5, y: gate.y, z: gate.z + 0.5 };
+  const itemTypes = CONFIG.DROPPED_ITEM_ENTITY_TYPES ?? ["minecraft:item"];
+  let removed = 0;
+
+  try {
+    const entities = dim.getEntities({ location, maxDistance: radius });
+    for (const entity of entities) {
+      if (!entity?.isValid) continue;
+      if (!itemTypes.includes(entity.typeId)) continue;
+      try {
+        entity.remove();
+        removed++;
+      } catch {
+        // ignore
+      }
+    }
+  } catch (error) {
+    logWarn(`clearDroppedItemsNearRoundCenter failed: ${error}`);
+  }
+  if (removed > 0) {
+    logInfo(
+      `cleared ${removed} dropped item(s) within ${radius} blocks of round center`
+    );
+  }
+  return removed;
+}
+
+/** ラウンド中心周辺のオオカミをすべて消す（終了・リセット用） */
+function clearAllHakoinuNearRoundCenter(center, dimension) {
+  const gate = center ?? activeRoundCenter ?? CONFIG.BOX_GATE;
+  const dim = dimension ?? getActiveRoundDimension();
+  if (!dim) return 0;
+
+  const radius = getEndHakoinuCleanupRadius();
+  const location = { x: gate.x + 0.5, y: gate.y, z: gate.z + 0.5 };
+  let removed = 0;
+
+  try {
+    const entities = dim.getEntities({ location, maxDistance: radius });
+    for (const entity of entities) {
+      if (!entity?.isValid) continue;
+      if (!CONFIG.HAKOINU_ENTITY_TYPES.includes(entity.typeId)) continue;
+      try {
+        removeSpawnedRoundEntityRef(entity.id);
+        entity.remove();
+        removed++;
+      } catch {
+        // ignore
+      }
+    }
+  } catch (error) {
+    logWarn(`clearAllHakoinuNearRoundCenter failed: ${error}`);
+  }
+  return removed;
 }
 
 /** @deprecated 互換エイリアス */
-function clearSpawnedHakoinu() {
+function clearSpawnedHakoinu(center, dimension) {
   clearSpawnedRoundEntities();
+  const wolves = clearAllHakoinuNearRoundCenter(center, dimension);
+  clearDroppedItemsNearRoundCenter(center, dimension);
+  if (wolves > 0) {
+    logInfo(
+      `cleared ${wolves} hakoinu within ${getEndHakoinuCleanupRadius()} blocks of round center`
+    );
+  }
 }
 
 function pickRandomPenaltyAnimalType() {
@@ -859,65 +998,315 @@ function pickRandomPenaltyAnimalType() {
   return types[Math.floor(Math.random() * types.length)];
 }
 
-function randomSpawnLocationNearGate(gate) {
+function randomSpawnLocationNearAnchor(anchor, usePlayerRing = false) {
+  const minD = usePlayerRing
+    ? (CONFIG.SPAWN_NEAR_PLAYER_MIN_DISTANCE ?? CONFIG.SPAWN_MIN_DISTANCE)
+    : CONFIG.SPAWN_MIN_DISTANCE;
+  const maxD = usePlayerRing
+    ? (CONFIG.SPAWN_NEAR_PLAYER_MAX_DISTANCE ?? 22)
+    : CONFIG.SPAWN_MAX_DISTANCE;
   const angle = Math.random() * Math.PI * 2;
-  const minD = CONFIG.SPAWN_MIN_DISTANCE;
-  const maxD = CONFIG.SPAWN_MAX_DISTANCE;
-  // 円盤内に均等分布（端に偏らない）
   const dist = minD + Math.sqrt(Math.random()) * (maxD - minD);
   return {
-    x: gate.x + 0.5 + Math.cos(angle) * dist,
-    y: gate.y + CONFIG.GATE_SUMMON_OFFSET_Y,
-    z: gate.z + 0.5 + Math.sin(angle) * dist,
+    x: anchor.x + Math.cos(angle) * dist,
+    y: anchor.y + CONFIG.GATE_SUMMON_OFFSET_Y,
+    z: anchor.z + Math.sin(angle) * dist,
   };
+}
+
+function randomSpawnLocationNearGate(gate) {
+  return randomSpawnLocationNearAnchor(
+    { x: gate.x + 0.5, y: gate.y, z: gate.z + 0.5 },
+    false
+  );
 }
 
 function trySpawnRoundEntity(dimension, entityType, location) {
   try {
     const entity = dimension.spawnEntity(entityType, location);
-    spawnedRoundEntities.push(entity);
+    spawnedRoundEntityIds.push(entity.id);
     return true;
-  } catch (error) {
-    logWarn(`spawn ${entityType} failed: ${error}`);
+  } catch {
     return false;
   }
 }
 
-function spawnRoundAnimalsAtGate(dimension) {
-  const gate = getActiveBoxGate();
+function trySpawnRoundEntityAtCandidates(dimension, entityType, makeBaseLocation) {
+  const attempts = Math.max(1, CONFIG.SPAWN_ATTEMPTS_PER_ENTITY ?? 1);
+  const yOffsets = [0, 1, 2, 3, -1, -2];
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const base = makeBaseLocation(attempt);
+    for (const yOff of yOffsets) {
+      if (
+        trySpawnRoundEntity(dimension, entityType, {
+          x: base.x,
+          y: base.y + yOff,
+          z: base.z,
+        })
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function trySpawnRoundEntityNearGate(dimension, entityType, gate) {
+  const ok = trySpawnRoundEntityAtCandidates(dimension, entityType, () =>
+    randomSpawnLocationNearGate(gate)
+  );
+  if (!ok) {
+    logWarn(`spawn ${entityType} failed near gate`);
+  }
+  return ok;
+}
+
+function trySpawnRoundEntityNearPlayer(dimension, entityType, player) {
+  if (!player?.isValid) return false;
+  let loc;
+  try {
+    loc = player.location;
+  } catch {
+    return false;
+  }
+  const anchor = { x: loc.x, y: loc.y, z: loc.z };
+  return trySpawnRoundEntityAtCandidates(dimension, entityType, () =>
+    randomSpawnLocationNearAnchor(anchor, true)
+  );
+}
+
+function trySpawnRoundEntityNearRandomPlayer(dimension, entityType) {
+  const players = world.getPlayers().filter((p) => p?.isValid);
+  if (players.length === 0) return false;
+  const tries = Math.min(players.length, 4);
+  for (let t = 0; t < tries; t++) {
+    const player = players[Math.floor(Math.random() * players.length)];
+    if (trySpawnRoundEntityNearPlayer(dimension, entityType, player)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function trySpawnRoundEntityForRound(dimension, entityType, preferredPlayer) {
+  if (CONFIG.SPAWN_NEAR_PLAYERS !== false) {
+    if (
+      preferredPlayer?.isValid &&
+      trySpawnRoundEntityNearPlayer(dimension, entityType, preferredPlayer)
+    ) {
+      return true;
+    }
+    if (trySpawnRoundEntityNearRandomPlayer(dimension, entityType)) {
+      return true;
+    }
+  }
+  return trySpawnRoundEntityNearGate(dimension, entityType, getActiveBoxGate());
+}
+
+/** @returns {{ kind: "hakoinu" | "penalty", location: import("@minecraft/server").Vector3 } | null} */
+function inspectSpawnedRoundEntity(entityId) {
+  const entity = resolveSpawnedRoundEntity(entityId);
+  if (!entity) return null;
+  try {
+    const typeId = entity.typeId;
+    const location = entity.location;
+    if (CONFIG.HAKOINU_ENTITY_TYPES.includes(typeId)) {
+      return { kind: "hakoinu", location };
+    }
+    if (CONFIG.PENALTY_ANIMAL_TYPES.includes(typeId)) {
+      return { kind: "penalty", location };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function removeSpawnedRoundEntityRef(entityOrId) {
+  const id = typeof entityOrId === "string" ? entityOrId : entityOrId?.id;
+  if (!id) return;
+  const index = spawnedRoundEntityIds.indexOf(id);
+  if (index >= 0) spawnedRoundEntityIds.splice(index, 1);
+}
+
+function pruneSpawnedRoundEntityIds() {
+  spawnedRoundEntityIds = spawnedRoundEntityIds.filter(
+    (entityId) => inspectSpawnedRoundEntity(entityId) !== null
+  );
+}
+
+/** @returns {{ hakoinu: number, penalty: number }} */
+function countActiveRoundSpawns() {
+  pruneSpawnedRoundEntityIds();
+  let hakoinu = 0;
+  let penalty = 0;
+  for (const entityId of spawnedRoundEntityIds) {
+    const info = inspectSpawnedRoundEntity(entityId);
+    if (info?.kind === "hakoinu") hakoinu++;
+    else if (info?.kind === "penalty") penalty++;
+  }
+  return { hakoinu, penalty };
+}
+
+function countRoundAnimalsNearPlayer(player) {
+  try {
+    if (!player?.isValid) return 0;
+    pruneSpawnedRoundEntityIds();
+    const loc = player.location;
+    const radius = CONFIG.SPAWN_NEAR_PLAYER_MAX_DISTANCE ?? 22;
+    const maxDistSq = radius * radius;
+    let count = 0;
+    for (const entityId of spawnedRoundEntityIds) {
+      const info = inspectSpawnedRoundEntity(entityId);
+      if (!info) continue;
+      const el = info.location;
+      if (distanceSq(loc.x, loc.y, loc.z, el.x, el.y, el.z) <= maxDistSq) {
+        count++;
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+function spawnRoundAnimalsAtGate(dimension, targets) {
   const hakoinuType = CONFIG.HAKOINU_ENTITY_TYPES[0];
+  const targetHakoinu = targets?.hakoinu ?? CONFIG.START_SPAWN_HAKOINU;
+  const targetPenalty = targets?.penalty ?? CONFIG.START_SPAWN_PENALTY_ANIMALS;
   let hakoinuSpawned = 0;
   let penaltySpawned = 0;
 
-  for (let i = 0; i < CONFIG.START_SPAWN_HAKOINU; i++) {
-    if (
-      trySpawnRoundEntity(
-        dimension,
-        hakoinuType,
-        randomSpawnLocationNearGate(gate)
-      )
-    ) {
+  for (let i = 0; i < targetHakoinu; i++) {
+    if (trySpawnRoundEntityForRound(dimension, hakoinuType)) {
       hakoinuSpawned++;
     }
   }
 
-  for (let i = 0; i < CONFIG.START_SPAWN_PENALTY_ANIMALS; i++) {
+  for (let i = 0; i < targetPenalty; i++) {
     const entityType = pickRandomPenaltyAnimalType();
-    if (
-      trySpawnRoundEntity(
-        dimension,
-        entityType,
-        randomSpawnLocationNearGate(gate)
-      )
-    ) {
+    if (trySpawnRoundEntityForRound(dimension, entityType)) {
       penaltySpawned++;
     }
   }
 
   logInfo(
-    `spawned hakoinu=${hakoinuSpawned}/${CONFIG.START_SPAWN_HAKOINU} penalty=${penaltySpawned}/${CONFIG.START_SPAWN_PENALTY_ANIMALS} near round center`
+    `spawned hakoinu=${hakoinuSpawned}/${targetHakoinu} penalty=${penaltySpawned}/${targetPenalty} (near players=${CONFIG.SPAWN_NEAR_PLAYERS !== false})`
   );
   return { hakoinuSpawned, penaltySpawned };
+}
+
+function spawnAfterCapture(player) {
+  if (!CONFIG.SPAWN_ON_CAPTURE_ENABLED || gameState !== "running") return;
+  if (!player?.isValid) return;
+
+  const dimension = player.dimension;
+  const hakoinuType = CONFIG.HAKOINU_ENTITY_TYPES[0];
+  const count = Math.max(1, CONFIG.SPAWN_ON_CAPTURE_COUNT ?? 1);
+  let spawned = 0;
+
+  for (let i = 0; i < count; i++) {
+    const { hakoinu } = countActiveRoundSpawns();
+    if (hakoinu >= CONFIG.START_SPAWN_HAKOINU) break;
+    if (trySpawnRoundEntityNearPlayer(dimension, hakoinuType, player)) {
+      spawned++;
+    }
+  }
+
+  if (spawned > 0) {
+    logInfo(`spawn after capture +${spawned} near ${player.name}`);
+  }
+}
+
+function replenishRoundSpawns(dimension) {
+  if (!CONFIG.SPAWN_REPLENISH_ENABLED || gameState !== "running") return;
+
+  let budget = Math.max(1, CONFIG.SPAWN_REPLENISH_MAX_PER_CHECK ?? 1);
+  let spawned = 0;
+  const hakoinuType = CONFIG.HAKOINU_ENTITY_TYPES[0];
+  const minNear = CONFIG.SPAWN_MIN_NEAR_PLAYER ?? 8;
+  const players = world.getPlayers().filter((p) => p?.isValid);
+
+  for (const player of players) {
+    if (budget <= 0) break;
+    const near = countRoundAnimalsNearPlayer(player);
+    if (near >= minNear) continue;
+
+    const deficit = minNear - near;
+    for (let i = 0; i < deficit && budget > 0; i++) {
+      const counts = countActiveRoundSpawns();
+      if (counts.hakoinu < CONFIG.START_SPAWN_HAKOINU) {
+        if (trySpawnRoundEntityNearPlayer(dimension, hakoinuType, player)) {
+          budget--;
+          spawned++;
+          continue;
+        }
+      }
+      if (counts.penalty < CONFIG.START_SPAWN_PENALTY_ANIMALS) {
+        const entityType = pickRandomPenaltyAnimalType();
+        if (trySpawnRoundEntityNearPlayer(dimension, entityType, player)) {
+          budget--;
+          spawned++;
+        }
+      }
+    }
+  }
+
+  const counts = countActiveRoundSpawns();
+  const needHakoinu = Math.max(0, CONFIG.START_SPAWN_HAKOINU - counts.hakoinu);
+  const needPenalty = Math.max(
+    0,
+    CONFIG.START_SPAWN_PENALTY_ANIMALS - counts.penalty
+  );
+
+  for (let i = 0; i < needHakoinu && budget > 0; i++) {
+    if (trySpawnRoundEntityForRound(dimension, hakoinuType)) {
+      budget--;
+      spawned++;
+    }
+  }
+  for (let i = 0; i < needPenalty && budget > 0; i++) {
+    const entityType = pickRandomPenaltyAnimalType();
+    if (trySpawnRoundEntityForRound(dimension, entityType)) {
+      budget--;
+      spawned++;
+    }
+  }
+
+  if (spawned > 0) {
+    const after = countActiveRoundSpawns();
+    logInfo(
+      `spawn replenish +${spawned} (hakoinu=${after.hakoinu}/${CONFIG.START_SPAWN_HAKOINU} penalty=${after.penalty}/${CONFIG.START_SPAWN_PENALTY_ANIMALS})`
+    );
+  }
+}
+
+function getActiveRoundDimension() {
+  const players = world.getPlayers();
+  if (players.length > 0) return players[0].dimension;
+  return placedChestRestore?.dimension;
+}
+
+function tickSpawnReplenish() {
+  if (gameState !== "running") return;
+  try {
+    const dimension = getActiveRoundDimension();
+    if (!dimension) return;
+    replenishRoundSpawns(dimension);
+  } catch (error) {
+    logWarn(`spawn replenish tick failed: ${error}`);
+  }
+}
+
+function startSpawnReplenishLoop() {
+  if (!CONFIG.SPAWN_REPLENISH_ENABLED) return;
+  if (spawnReplenishLoopId !== undefined) return;
+  const intervalSec = Math.max(1, CONFIG.SPAWN_REPLENISH_INTERVAL_SECONDS ?? 4);
+  spawnReplenishLoopId = system.runInterval(
+    tickSpawnReplenish,
+    intervalSec * TICKS_PER_SECOND
+  );
 }
 
 /** @deprecated 互換エイリアス */
@@ -982,6 +1371,40 @@ function removeItemTypeFromInventory(player, typeId) {
       container.setItem(slot, undefined);
     }
   }
+}
+
+function countItemInInventory(player, typeId) {
+  const container = player.getComponent("inventory")?.container;
+  if (!container) return 0;
+
+  let total = 0;
+  for (let slot = 0; slot < container.size; slot++) {
+    const item = container.getItem(slot);
+    if (item?.typeId === typeId) total += item.amount;
+  }
+  return total;
+}
+
+/** @returns {number} 実際に消費できた数 */
+function consumeItemFromInventory(player, typeId, amount) {
+  if (amount <= 0) return 0;
+  const container = player.getComponent("inventory")?.container;
+  if (!container) return 0;
+
+  let remaining = amount;
+  for (let slot = 0; slot < container.size && remaining > 0; slot++) {
+    const item = container.getItem(slot);
+    if (!item || item.typeId !== typeId) continue;
+
+    if (item.amount <= remaining) {
+      remaining -= item.amount;
+      container.setItem(slot, undefined);
+    } else {
+      container.setItem(slot, new ItemStack(typeId, item.amount - remaining));
+      remaining = 0;
+    }
+  }
+  return amount - remaining;
 }
 
 function giveStartKit(player) {
@@ -1239,6 +1662,15 @@ function isSubmissionChestBlockType(typeId) {
   return CONFIG.SUBMISSION_CHEST_BLOCK_TYPES.includes(typeId);
 }
 
+function getChestCleanupBounds(chestSpot) {
+  const footY = chestSpot.footY ?? Math.floor((chestSpot.y ?? 0) - 1);
+  const vertical = Math.max(2, CONFIG.CHEST_CLEANUP_VERTICAL_RANGE ?? 10);
+  return {
+    minY: footY - vertical,
+    maxY: footY + vertical,
+  };
+}
+
 function clearContainerItems(container) {
   if (!container) return;
   for (let slot = 0; slot < container.size; slot++) {
@@ -1250,18 +1682,36 @@ function clearContainerItems(container) {
 function removeExtraChestsInArea(dimension, centerX, centerZ, radius, minY, maxY) {
   const baseX = Math.floor(centerX);
   const baseZ = Math.floor(centerZ);
+  const x1 = baseX - radius;
+  const x2 = baseX + radius;
+  const z1 = baseZ - radius;
+  const z2 = baseZ + radius;
+  const y1 = Math.floor(minY);
+  const y2 = Math.floor(maxY);
   let removed = 0;
+
+  if (typeof dimension.runCommand === "function") {
+    for (const typeId of CONFIG.SUBMISSION_CHEST_BLOCK_TYPES) {
+      const blockName = typeId.replace("minecraft:", "");
+      try {
+        dimension.runCommand(
+          `fill ${x1} ${y1} ${z1} ${x2} ${y2} ${z2} air replace ${blockName}`
+        );
+      } catch (error) {
+        logWarn(`fill replace ${blockName} failed: ${error}`);
+      }
+    }
+  }
 
   for (let dx = -radius; dx <= radius; dx++) {
     for (let dz = -radius; dz <= radius; dz++) {
-      for (let y = minY; y <= maxY; y++) {
+      if (dx * dx + dz * dz > radius * radius) continue;
+      for (let y = y1; y <= y2; y++) {
         const x = baseX + dx;
         const z = baseZ + dz;
         try {
           const block = dimension.getBlock({ x, y, z });
-          if (!block?.isValid || !isSubmissionChestBlockType(block.typeId)) {
-            continue;
-          }
+          if (!block?.isValid || !isSubmissionChestBlockType(block.typeId)) continue;
 
           clearContainerItems(block.getComponent("inventory")?.container);
           setBlockTypeAt(dimension, { x, y, z }, "minecraft:air");
@@ -1274,7 +1724,9 @@ function removeExtraChestsInArea(dimension, centerX, centerZ, radius, minY, maxY
   }
 
   if (removed > 0) {
-    logInfo(`removed ${removed} extra chest(s) near submission spot`);
+    logInfo(
+      `removed ${removed} extra chest(s) near (${baseX}, ${baseZ}) r=${radius} y=${y1}..${y2}`
+    );
   }
   return removed;
 }
@@ -1311,13 +1763,14 @@ function placeSubmissionChest(dimension, spot) {
   placedChestRestore = null;
   activeSubmissionChestPos = null;
 
+  const cleanup = getChestCleanupBounds(spot);
   removeExtraChestsInArea(
     dimension,
     spot.x,
     spot.z,
     CONFIG.CHEST_CLEANUP_RADIUS,
-    spot.footY - 1,
-    spot.footY + 2
+    cleanup.minY,
+    cleanup.maxY
   );
 
   const before = dimension.getBlock({ x: spot.x, y: spot.y, z: spot.z });
@@ -1356,15 +1809,16 @@ function prepareRoundStart(validation) {
   clearSpawnedRoundEntities();
   removePlacedSubmissionChest(dimension);
 
-  const yBase = chestSpot.footY;
+  const cleanup = getChestCleanupBounds(chestSpot);
   removeExtraChestsInArea(
     dimension,
     center.x,
     center.z,
     CONFIG.CHEST_CLEANUP_RADIUS,
-    yBase - 2,
-    yBase + 4
+    cleanup.minY,
+    cleanup.maxY
   );
+  clearDroppedItemsNearRoundCenter(center, dimension);
 
   if (!placeSubmissionChest(dimension, chestSpot)) {
     return false;
@@ -1473,11 +1927,28 @@ function tryProtectHakoinu(player, preferredTarget) {
     return;
   }
 
+  const boneCost = Math.max(0, CONFIG.BONES_PER_CAPTURE ?? 1);
+  if (boneCost > 0 && countItemInInventory(player, CONFIG.PROTECT_ITEM) < boneCost) {
+    robwPlayerMessage(player, "§c骨が足りません。");
+    return;
+  }
+
   const entityId = target.id;
   const entityType = target.typeId;
   const kind = CONFIG.HAKOINU_ENTITY_TYPES.includes(entityType)
     ? "hakoinu"
     : "wrong";
+
+  if (boneCost > 0) {
+    const consumed = consumeItemFromInventory(player, CONFIG.PROTECT_ITEM, boneCost);
+    if (consumed < boneCost) {
+      robwPlayerMessage(player, "§c骨が足りません。");
+      return;
+    }
+  }
+
+  removeSpawnedRoundEntityRef(entityId);
+  scriptRemovedRoundEntityIds.add(entityId);
   target.remove();
 
   giveReturnBox(player, 1, kind);
@@ -1487,6 +1958,111 @@ function tryProtectHakoinu(player, preferredTarget) {
     `§7${CONFIG.RETURN_BOX_DISPLAY_NAME} を納品チェスト (${chest.x}, ${chest.y}, ${chest.z}) に入れてください。`
   );
   logInfo(`${kind} captured by ${player.name} (entity ${entityId}, ${entityType})`);
+  spawnAfterCapture(player);
+}
+
+function resolveKillAttributionPlayer(damageSource) {
+  if (!damageSource) return null;
+  try {
+    const entity = damageSource.damagingEntity;
+    if (!entity) return null;
+    if (entity.isValid && entity.typeId === "minecraft:player") {
+      return entity;
+    }
+    const projectile = entity.getComponent("minecraft:projectile");
+    const owner = projectile?.owner;
+    if (owner?.isValid && owner.typeId === "minecraft:player") {
+      return owner;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function isRoundSpawnedHakoinuEntity(entityId, typeId) {
+  if (!entityId || !CONFIG.HAKOINU_ENTITY_TYPES.includes(typeId)) return false;
+  if (scriptRemovedRoundEntityIds.has(entityId)) return false;
+  return spawnedRoundEntityIds.includes(entityId);
+}
+
+function applyHakoinuCombatPenalty(player, points, message) {
+  if (!player?.isValid || points === 0) return;
+  const total = addReturnPoints(player, points);
+  robwPlayerMessage(
+    player,
+    `${message} ${formatPointsDelta(points)} §7(合計 ${total}pt)`
+  );
+  if (timerHudActive) {
+    refreshRemainingTimeHud();
+  }
+}
+
+function handleHakoinuRoundHurt(hurtEntity, damageSource) {
+  if (gameState !== "running") return;
+
+  let entityId;
+  let typeId;
+  try {
+    entityId = hurtEntity.id;
+    typeId = hurtEntity.typeId;
+  } catch {
+    return;
+  }
+
+  if (!isRoundSpawnedHakoinuEntity(entityId, typeId)) return;
+
+  const penalty = CONFIG.POINTS_HAKOINU_HIT ?? -1;
+  if (penalty === 0) return;
+
+  const attacker = resolveKillAttributionPlayer(damageSource);
+  if (!attacker?.isValid) return;
+
+  applyHakoinuCombatPenalty(
+    attacker,
+    penalty,
+    "§cハコイヌを攻撃してしまった！"
+  );
+  logInfo(`hakoinu hit by ${attacker.name} (${penalty} pts, entity ${entityId})`);
+}
+
+function handleHakoinuRoundDeath(deadEntity, damageSource) {
+  if (gameState !== "running") return;
+
+  let entityId;
+  let typeId;
+  try {
+    entityId = deadEntity.id;
+    typeId = deadEntity.typeId;
+  } catch {
+    return;
+  }
+
+  if (scriptRemovedRoundEntityIds.has(entityId)) {
+    scriptRemovedRoundEntityIds.delete(entityId);
+    return;
+  }
+
+  if (!isRoundSpawnedHakoinuEntity(entityId, typeId)) return;
+
+  removeSpawnedRoundEntityRef(entityId);
+
+  const penalty = CONFIG.POINTS_HAKOINU_KILL ?? -10;
+  if (penalty === 0) return;
+
+  const killer = resolveKillAttributionPlayer(damageSource);
+  if (killer?.isValid) {
+    const total = addReturnPoints(killer, penalty);
+    broadcast(
+      `§c${killer.name}§fがハコイヌを倒してしまった！ ${formatPointsDelta(penalty)} §7(合計 ${total}pt)`
+    );
+    logInfo(`hakoinu killed by ${killer.name} (${penalty} pts, entity ${entityId})`);
+    if (timerHudActive) {
+      refreshRemainingTimeHud();
+    }
+  } else {
+    logInfo(`hakoinu killed with no player attribution (entity ${entityId})`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1637,8 +2213,11 @@ function processSubmissionChest(player) {
     returned.hakoinu * CONFIG.POINTS_PER_BOX +
     returned.wrong * CONFIG.POINTS_WRONG_ANIMAL;
   const total = addReturnPoints(player, points);
-  const bonesEarned =
+  const bonesFromHakoinu =
     returned.hakoinu * CONFIG.BONES_PER_HAKOINU_DELIVERY;
+  const bonesFromWrong =
+    returned.wrong * (CONFIG.BONES_PER_WRONG_ANIMAL_DELIVERY ?? 0);
+  const bonesEarned = bonesFromHakoinu + bonesFromWrong;
   if (bonesEarned > 0) {
     giveBones(player, bonesEarned);
   }
@@ -1652,9 +2231,14 @@ function processSubmissionChest(player) {
       `§c別種 ${returned.wrong} 枚 … ${formatPointsDelta(returned.wrong * CONFIG.POINTS_WRONG_ANIMAL)}`
     );
   }
-  if (bonesEarned > 0) {
+  if (bonesFromHakoinu > 0) {
     robwPlayerMessage(player,
-      `§a納品ボーナス: 骨 x${bonesEarned} §7(ハコイヌ 1 匹あたり x${CONFIG.BONES_PER_HAKOINU_DELIVERY})`
+      `§a納品ボーナス: 骨 x${bonesFromHakoinu} §7(ハコイヌ x${CONFIG.BONES_PER_HAKOINU_DELIVERY}/枚)`
+    );
+  }
+  if (bonesFromWrong > 0) {
+    robwPlayerMessage(player,
+      `§a納品ボーナス: 骨 x${bonesFromWrong} §7(別種 x${CONFIG.BONES_PER_WRONG_ANIMAL_DELIVERY}/枚)`
     );
   }
   logInfo(
@@ -1725,6 +2309,10 @@ function stopGameLoops() {
   if (submissionLoopId !== undefined) {
     system.clearRun(submissionLoopId);
     submissionLoopId = undefined;
+  }
+  if (spawnReplenishLoopId !== undefined) {
+    system.clearRun(spawnReplenishLoopId);
+    spawnReplenishLoopId = undefined;
   }
   stopRemainingTimeHudLoop();
 }
@@ -2046,7 +2634,7 @@ function beginGameRound(host, validation) {
     `§fゲート開放時間: ${CONFIG.GATE_OPEN_MINUTES}分 | 骨で捕獲 -> 足元の納品チェストへ`
   );
   broadcast(
-    `§7ハコイヌ以外を納品すると §c${CONFIG.POINTS_WRONG_ANIMAL}pt§7 ペナルティ`
+    `§7ハコイヌを攻撃 §c${CONFIG.POINTS_HAKOINU_HIT}pt§7/回、倒すと §c${CONFIG.POINTS_HAKOINU_KILL}pt§7 / 別種納品 §c${CONFIG.POINTS_WRONG_ANIMAL}pt§7`
   );
   broadcast(
     `§7開始地点: ${host.name} の位置 (${validation.center.x}, ${validation.center.y}, ${validation.center.z})`
@@ -2075,6 +2663,7 @@ function beginGameRound(host, validation) {
     }
     processSubmissionChest(lastSubmissionPlayer);
   }, TICKS_PER_SECOND);
+  startSpawnReplenishLoop();
 
   robwPlayerMessage(host,"§a[ROBW] ゲートを起動しました！");
   logInfo(
@@ -2159,9 +2748,11 @@ function resetGame() {
   resetTimerState();
   resetAllScores();
   clearAllReturnBoxLedgers();
-  clearSpawnedHakoinu();
-  activeRoundCenter = null;
+  const center = activeRoundCenter;
   const players = world.getPlayers();
+  const dimension = players.length > 0 ? players[0].dimension : undefined;
+  clearSpawnedHakoinu(center, dimension);
+  activeRoundCenter = null;
   if (players.length > 0) {
     removePlacedSubmissionChest(players[0].dimension);
   }
@@ -2310,20 +2901,26 @@ function openRobwControlMenuChat(player) {
 function openRobwControlMenu(player) {
   if (!player?.isValid) return;
 
+  const showForm = globalThis.robwShowActionMenu;
+  if (typeof showForm === "function") {
+    showForm(player, getRobwMenuStatePlain(), onRobwMenuSelected);
+    return;
+  }
   system.run(() => {
     if (!player.isValid) return;
-    const showForm = globalThis.robwShowActionMenu;
-    if (typeof showForm === "function") {
-      showForm(player, getRobwMenuStatePlain(), onRobwMenuSelected);
-      return;
-    }
     openRobwControlMenuChat(player);
   });
 }
 
+/** 同一 tick の itemUse 二重発火を防ぐ */
+const wandMenuOpenTick = new Map();
+
 function tryOpenRobwMenuFromWand(player, itemStack) {
   if (!player?.isValid) return false;
-  if (!shouldProcessWandUse(player.id)) return true;
+
+  const tick = system.currentTick;
+  if (wandMenuOpenTick.get(player.id) === tick) return true;
+  wandMenuOpenTick.set(player.id, tick);
 
   const held = itemStack ?? getHeldItemStack(player);
   if (!held || !isRobwWandItemType(held.typeId)) return false;
@@ -2337,13 +2934,12 @@ function tryOpenRobwMenuFromWand(player, itemStack) {
   const sub = resolveWandSubcommand(held);
   if (!sub) return false;
 
-  robwPlayerMessage(player,"§7[ROBW] 操作時計を使用中...");
-
   if (sub === "menu") {
     openRobwControlMenu(player);
     return true;
   }
 
+  robwPlayerMessage(player,"§7[ROBW] 操作時計を使用中...");
   runRobwSubcommand(sub, player);
   robwPlayerMessage(player,`§7[ROBW] ${sub} を実行しました`);
   return true;
@@ -2362,17 +2958,6 @@ function getHeldItemStack(player) {
   }
 
   return container.getItem(slot);
-}
-
-/** @type {Map<string, number>} */
-const recentWandUseTick = new Map();
-
-function shouldProcessWandUse(playerId) {
-  const now = system.currentTick;
-  const last = recentWandUseTick.get(playerId) ?? 0;
-  if (now - last < 10) return false;
-  recentWandUseTick.set(playerId, now);
-  return true;
 }
 
 function tryRobwWand(player, itemStack) {
@@ -2398,6 +2983,35 @@ function playerHasStarterWand(player) {
     }
   }
   return false;
+}
+
+/** @returns {boolean} */
+function isLegacyRobwWandNameTag(nameTag) {
+  const name = stripFormatting(nameTag ?? "").toLowerCase();
+  if (!name) return false;
+  for (const legacy of CONFIG.WAND_LEGACY_MENU_NAMES ?? []) {
+    if (name === legacy.toLowerCase()) return true;
+  }
+  return false;
+}
+
+/** 旧名（ROBW:start）のバニラ時計だけ ROBW:menu に直す @returns {boolean} */
+function normalizeRobwWandNameTags(player) {
+  const container = player.getComponent("inventory")?.container;
+  if (!container) return false;
+
+  let changed = false;
+  for (let slot = 0; slot < container.size; slot++) {
+    const item = container.getItem(slot);
+    if (!item || item.typeId !== CONFIG.WAND_ITEM) continue;
+    if (!isLegacyRobwWandNameTag(item.nameTag)) continue;
+
+    const next = new ItemStack(CONFIG.WAND_ITEM, item.amount);
+    next.nameTag = CONFIG.WAND_MENU_NAME;
+    container.setItem(slot, next);
+    changed = true;
+  }
+  return changed;
 }
 
 function addItemStackToPlayer(player, stack) {
@@ -2442,6 +3056,8 @@ function giveStarterWand(player, options) {
   const notifyIfOwned = options?.notifyIfOwned === true;
 
   try {
+    normalizeRobwWandNameTags(player);
+
     if (playerHasStarterWand(player)) {
       if (notifyIfOwned) {
         robwPlayerMessage(player, "§7[ROBW] 操作時計は既に持っています");
@@ -2630,20 +3246,18 @@ function registerItemUseHandlers() {
     runUse(player, itemStack);
   };
 
-  const beforeUse = world.beforeEvents?.itemUse;
-  if (beforeUse) {
-    beforeUse.subscribe((event) => onItemUse(event, true));
-    logInfo("item handler: beforeEvents.itemUse (wand + bone)");
-  }
-
   const afterUse = world.afterEvents?.itemUse;
   if (afterUse) {
     afterUse.subscribe((event) => onItemUse(event, false));
     logInfo("item handler: afterEvents.itemUse (wand + bone)");
-  }
-
-  if (!beforeUse && !afterUse) {
-    logWarn("itemUse events not available");
+  } else {
+    const beforeUse = world.beforeEvents?.itemUse;
+    if (beforeUse) {
+      beforeUse.subscribe((event) => onItemUse(event, true));
+      logInfo("item handler: beforeEvents.itemUse (wand + bone, fallback)");
+    } else {
+      logWarn("itemUse events not available");
+    }
   }
 }
 
@@ -2783,6 +3397,32 @@ function registerBoneInteractHandlers() {
   }
 }
 
+function registerHakoinuCombatHandlers() {
+  const hurtSignal = world.afterEvents?.entityHurt;
+  if (hurtSignal) {
+    hurtSignal.subscribe((event) => {
+      system.run(() => {
+        handleHakoinuRoundHurt(event.hurtEntity, event.damageSource);
+      });
+    });
+    logInfo("hakoinu hit penalty: afterEvents.entityHurt");
+  } else {
+    logWarn("entityHurt not available for hakoinu hit penalty");
+  }
+
+  const dieSignal = world.afterEvents?.entityDie;
+  if (dieSignal) {
+    dieSignal.subscribe((event) => {
+      system.run(() => {
+        handleHakoinuRoundDeath(event.deadEntity, event.damageSource);
+      });
+    });
+    logInfo("hakoinu kill penalty: afterEvents.entityDie");
+  } else {
+    logWarn("entityDie not available for hakoinu kill penalty");
+  }
+}
+
 function registerGameEvents() {
   if (gameEventsRegistered) return;
 
@@ -2791,6 +3431,7 @@ function registerGameEvents() {
   registerWandInteractHandlers();
   registerBoneInteractHandlers();
   registerSubmissionChestHandler();
+  registerHakoinuCombatHandlers();
 
   const scriptEventSignal =
     system.afterEvents?.scriptEventReceive ??

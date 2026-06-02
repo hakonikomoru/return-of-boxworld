@@ -2,8 +2,13 @@
   "name": "return-of-boxworld",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Minecraft Bedrock 統合版アドオン「Return of BoxWorld」",
   "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "node --test tests/project-sync-core.test.mjs tests/repo-integrity.test.mjs",
+    "test:ci": "npm test && npm run lint && npm run sync:project-docs:check && npm run verify:bedrock-pack",
     "sync:project-docs": "node scripts/sync-project-docs.mjs",
     "sync:project-docs:check": "node scripts/sync-project-docs.mjs --check",
     "verify:bedrock-pack": "node scripts/verify-bedrock-pack.mjs",
@@ -16,5 +21,10 @@
     "tail:bedrock-log:mirror": "node scripts/tail-bedrock-log.mjs --mirror",
     "tail:bedrock-log:gui": "node scripts/tail-bedrock-log.mjs --mirror --clipboard",
     "diagnose:bedrock-log": "node scripts/diagnose-bedrock-log.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.28.0",
+    "eslint": "^9.28.0",
+    "globals": "^16.2.0"
   }
 }
