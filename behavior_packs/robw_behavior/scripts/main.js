@@ -27,6 +27,8 @@ const CONFIG = {
   GATE_OPEN_MINUTES: 5,
   /** 残り時間をチャットに出す間隔（秒） */
   TIME_NOTIFY_INTERVAL_SECONDS: 60,
+  /** 10 秒あたりの全員チャット上限（左上オーバーレイの詰まり抑制） */
+  UI_BROADCAST_MAX_PER_10_SECONDS: 4,
   /** 骨で捕獲できる動物までの距離（ブロック） */
   PROTECTION_RADIUS: 4,
   /** ラウンド中心のフォールバック（通常は start した人の位置が使われる） */
@@ -135,6 +137,8 @@ const CONFIG = {
   POINTS_HAKOINU_KILL: -10,
   /** ラウンド中にハコイヌへ与えたダメージ 1 回あたりの減点 */
   POINTS_HAKOINU_HIT: -1,
+  /** ラウンド中にプレイヤーが死亡したときの減点（マイナスで書く） */
+  POINTS_PLAYER_DEATH: -10,
   /** スコアボードの objective ID */
   SCORE_OBJECTIVE: "return_point",
   /** チャットコマンドの接頭辞（例: !robw start） */
@@ -191,6 +195,9 @@ const TIME_NOTIFY_INTERVAL_MS =
 const MS_PER_TICK = 1000 / TICKS_PER_SECOND;
 const DAYTIME_LOCK_INTERVAL_TICKS = 200;
 const LOCKED_DIMENSION_IDS = ["overworld", "nether", "the_end"];
+const UI_BROADCAST_WINDOW_MS = 10_000;
+let uiBroadcastWindowStartMs = 0;
+let uiBroadcastCountInWindow = 0;
 
 // ---------------------------------------------------------------------------
 // ゲーム状態
@@ -220,10 +227,24 @@ let activeSubmissionChestPos = null;
 let placedChestRestore = null;
 /** @type {{ x: number, y: number, z: number, radius: number } | null} */
 let activeRoundCenter = null;
+/** @type {import("@minecraft/server").Dimension | null} */
+let activeRoundDimension = null;
 let startCountdownGeneration = 0;
 let endCountdownGeneration = 0;
 /** 時間切れ時、タイマー残り秒（3・2・1）ごとに演出済みか */
 let endCountdownSyncedSecsShown = new Set();
+/** ラウンド中の死亡後、骨補充などリスポーン後処理待ちのプレイヤー ID */
+const pendingRoundDeathRespawnIds = new Set();
+/** 同一死亡で開始地点復帰 TP を二重実行しない */
+const roundDeathRecoveryInProgress = new Set();
+/** 同一死亡で減点を二重適用しない */
+const roundDeathPenaltyAppliedIds = new Set();
+/** playerDie 時点で無効だったプレイヤーへの減点を復活後に適用 */
+const pendingRoundDeathPenaltyIds = new Set();
+/** ラウンド開始前の個人スポーン（終了時に戻す） */
+const savedPlayerSpawnBeforeRound = new Map();
+/** @type {boolean | null} */
+let savedDoImmediateRespawn = null;
 /** @type {number | undefined} */
 let hudLoopId = undefined;
 /** @type {string | null} */
@@ -239,6 +260,8 @@ let timerHudActive = false;
 let timerHudWatchdogId = undefined;
 /** セッションホスト（先に入ったプレイヤー。退出時は次の参加者へ） @type {string | null} */
 let sessionHostPlayerId = null;
+/** 再接続などで ID が変わったときのフォールバック @type {string | null} */
+let sessionHostPlayerName = null;
 
 // ---------------------------------------------------------------------------
 // ログ
@@ -273,9 +296,33 @@ function robwPlayerMessage(player, message) {
   }
 }
 
+function resetUiBroadcastBudget() {
+  uiBroadcastWindowStartMs = 0;
+  uiBroadcastCountInWindow = 0;
+}
+
+/** @param {"high" | "normal"} [priority] high はレート制限を bypass */
+function canSendUiBroadcast(priority = "normal") {
+  if (priority === "high") return true;
+  const max = Math.max(1, CONFIG.UI_BROADCAST_MAX_PER_10_SECONDS ?? 4);
+  const now = Date.now();
+  if (now - uiBroadcastWindowStartMs >= UI_BROADCAST_WINDOW_MS) {
+    uiBroadcastWindowStartMs = now;
+    uiBroadcastCountInWindow = 0;
+  }
+  if (uiBroadcastCountInWindow >= max) return false;
+  uiBroadcastCountInWindow += 1;
+  return true;
+}
+
 /** 全員向けチャット（コンテンツログにも出す） */
-function robwBroadcast(message) {
+function robwBroadcast(message, options = {}) {
   const text = String(message ?? "");
+  const priority = options.priority === "high" ? "high" : "normal";
+  if (!canSendUiBroadcast(priority)) {
+    logInfo(`[ゲーム内] 全員(省略): ${stripMcFormatting(text)}`);
+    return;
+  }
   logInfo(`[ゲーム内] 全員: ${stripMcFormatting(text)}`);
   world.sendMessage(message);
 }
@@ -393,6 +440,7 @@ function cancelStartCountdown() {
   if (gameState === "countdown") {
     gameState = "waiting";
     activeRoundCenter = null;
+    activeRoundDimension = null;
     clearRemainingTimeHud();
   }
 }
@@ -475,7 +523,7 @@ function runStartCountdown(host, validation, onComplete) {
   const center = validation.center;
 
   gameState = "countdown";
-  broadcast(`§6${host.name}§fがゲートを起動します...`);
+  broadcast(`§6${host.name}§fがゲートを起動します...`, { priority: "high" });
 
   for (let i = 0; i < START_COUNTDOWN_SEQUENCE.length; i++) {
     const step = START_COUNTDOWN_SEQUENCE[i];
@@ -488,9 +536,9 @@ function runStartCountdown(host, validation, onComplete) {
         spawnCountdownBurst(validation.dimension, center);
       }
       if (i >= 1 && i <= 3) {
-        broadcast(`§e§l  ${4 - i}  `);
+        broadcast(`§e§l  ${4 - i}  `, { priority: "high" });
       } else if (i === START_COUNTDOWN_SEQUENCE.length - 1) {
-        broadcast("§a§l===== START! =====");
+        broadcast("§a§l===== START! =====", { priority: "high" });
       }
     }, i * stepTicks);
   }
@@ -558,7 +606,7 @@ function showEndCountdownStep(index) {
   showCeremonyPresentation(step, stepTicks);
 
   if (index >= 0 && index <= 2) {
-    broadcast(`§e§l  ${3 - index}  `);
+    broadcast(`§e§l  ${3 - index}  `, { priority: "high" });
     return;
   }
 
@@ -570,7 +618,7 @@ function showEndCountdownStep(index) {
   if (dimension && center) {
     spawnEndCeremonyBurst(dimension, center);
   }
-  broadcast("§6§l===== ゲート閉鎖! =====");
+  broadcast("§6§l===== ゲート閉鎖! =====", { priority: "high" });
 }
 
 /** ゲート残り時間の 3・2・1 秒と同期して終了カウントを出す（running 中のみ） */
@@ -637,18 +685,23 @@ function runGameEndCountdown(onComplete) {
 
 function finalizeGameAfterCeremony() {
   gameState = "finished";
+  clearPendingRoundDeathRespawns();
+  restoreRoundRespawnSettings();
   clearRemainingTimeHud();
   const center = activeRoundCenter;
   const dimension = getActiveRoundDimension();
   clearSpawnedHakoinu(center, dimension);
   activeRoundCenter = null;
+  activeRoundDimension = null;
 
   const players = world.getPlayers();
   if (players.length > 0) {
     removePlacedSubmissionChest(players[0].dimension);
   }
 
-  broadcast("§6ゲート閉鎖！ハコイヌたちの帰還結果を発表します！");
+  broadcast("§6ゲート閉鎖！ハコイヌたちの帰還結果を発表します！", {
+    priority: "high",
+  });
   showRanking();
   resetAllPlayersToLobbyInventory();
   logInfo("gate closed, game finished");
@@ -663,7 +716,7 @@ function beginManualGameEndCeremony() {
   stopGameLoops();
   clearRemainingTimeHud();
   clearSpawnedHakoinu(activeRoundCenter, getActiveRoundDimension());
-  broadcast("§eゲートを手動で閉鎖します...");
+  broadcast("§eゲートを手動で閉鎖します...", { priority: "high" });
 
   runGameEndCountdown(() => {
     if (gameState !== "closing") return;
@@ -679,7 +732,7 @@ function beginTimedGameEndFinalize() {
   stopGameLoops();
   clearRemainingTimeHud();
   clearSpawnedHakoinu(activeRoundCenter, getActiveRoundDimension());
-  broadcast("§c§l時間切れ！§fゲートを閉鎖します...");
+  broadcast("§c§l時間切れ！§fゲートを閉鎖します...", { priority: "high" });
 
   const generation = ++endCountdownGeneration;
   const stepTicks = CONFIG.START_COUNTDOWN_STEP_TICKS;
@@ -720,8 +773,8 @@ function requestGameEnd(wasManualStop = false) {
 // ユーティリティ
 // ---------------------------------------------------------------------------
 
-function broadcast(message) {
-  robwBroadcast(message);
+function broadcast(message, options) {
+  robwBroadcast(message, options);
 }
 
 function distanceSq(ax, ay, az, bx, by, bz) {
@@ -1343,7 +1396,18 @@ function replenishRoundSpawns(dimension) {
   }
 }
 
+function getRoundStartDimension() {
+  if (activeRoundDimension) return activeRoundDimension;
+  try {
+    return world.getDimension("overworld");
+  } catch (error) {
+    logWarn(`getRoundStartDimension failed: ${error}`);
+    return null;
+  }
+}
+
 function getActiveRoundDimension() {
+  if (activeRoundDimension) return activeRoundDimension;
   const players = world.getPlayers();
   if (players.length > 0) return players[0].dimension;
   return placedChestRestore?.dimension;
@@ -1468,6 +1532,17 @@ function consumeItemFromInventory(player, typeId, amount) {
   return amount - remaining;
 }
 
+/** ラウンド中の死亡復帰時: 骨だけ開始時と同数に補充（時計はホストのみ保持） */
+function giveRoundRespawnBones(player) {
+  if (!player?.isValid) return 0;
+
+  const amount = Math.max(0, CONFIG.START_GIVE_BONES ?? 0);
+  if (amount <= 0) return 0;
+
+  removeItemTypeFromInventory(player, CONFIG.PROTECT_ITEM);
+  return giveBones(player, amount);
+}
+
 function giveStartKit(player) {
   clearPlayerReturnBoxLedger(player.id);
   if (isSessionHost(player)) {
@@ -1528,21 +1603,33 @@ function getActiveBoxGate() {
 // セッションホスト（ゲート起動・操作時計はホストのみ）
 // ---------------------------------------------------------------------------
 
+/** @param {import("@minecraft/server").Player} player */
+function claimSessionHost(player) {
+  sessionHostPlayerId = player.id;
+  sessionHostPlayerName = player.name;
+  logInfo(`session host: ${player.name}`);
+  return player;
+}
+
 /** @returns {import("@minecraft/server").Player | null} */
 function getSessionHost() {
   if (sessionHostPlayerId) {
-    const found = world.getPlayers().find((p) => p.id === sessionHostPlayerId);
-    if (found?.isValid) return found;
+    const byId = world.getPlayers().find((p) => p.id === sessionHostPlayerId);
+    if (byId?.isValid) return byId;
   }
 
-  const players = world.getPlayers();
-  if (players.length === 0) {
-    sessionHostPlayerId = null;
-    return null;
+  if (sessionHostPlayerName) {
+    const byName = world.getPlayers().find(
+      (p) => p?.isValid && p.name === sessionHostPlayerName
+    );
+    if (byName) {
+      sessionHostPlayerId = byName.id;
+      logInfo(`session host restored by name: ${byName.name}`);
+      return byName;
+    }
   }
 
-  sessionHostPlayerId = players[0].id;
-  return players[0];
+  return null;
 }
 
 function isSessionHost(player) {
@@ -1554,7 +1641,16 @@ function isSessionHost(player) {
 /** @returns {import("@minecraft/server").Player | null} */
 function ensureSessionHostAssigned() {
   const host = getSessionHost();
-  return host;
+  if (host) return host;
+
+  const players = world.getPlayers().filter((p) => p?.isValid);
+  if (players.length === 0) {
+    sessionHostPlayerId = null;
+    sessionHostPlayerName = null;
+    return null;
+  }
+
+  return claimSessionHost(players[0]);
 }
 
 /**
@@ -1604,6 +1700,7 @@ function ensureHostWandDistribution() {
 function onSessionHostLeft(player) {
   if (player.id !== sessionHostPlayerId) return;
   sessionHostPlayerId = null;
+  sessionHostPlayerName = null;
   system.run(() => {
     const next = getSessionHost();
     if (!next) return;
@@ -2013,10 +2110,10 @@ function tryProtectHakoinu(player, preferredTarget) {
   target.remove();
 
   giveReturnBox(player, 1, kind);
-  broadcast(`§a${player.name}§fが毛皮を手に入れた！`);
   const chest = getActiveSubmissionChestPos();
-  robwPlayerMessage(player,
-    `§7${CONFIG.RETURN_BOX_DISPLAY_NAME} を納品チェスト (${chest.x}, ${chest.y}, ${chest.z}) に入れてください。`
+  robwPlayerMessage(
+    player,
+    `§a毛皮を手に入れた！ §7${CONFIG.RETURN_BOX_DISPLAY_NAME} を納品チェスト (${chest.x}, ${chest.y}, ${chest.z}) に入れてください。`
   );
   logInfo(`${kind} captured by ${player.name} (entity ${entityId}, ${entityType})`);
   spawnAfterCapture(player);
@@ -2297,11 +2394,6 @@ function announceDelivery(player, returned, junkCount, points, total) {
     );
   }
 
-  if (junkCount > 0) {
-    broadcast(
-      `§7${player.name}§fの納品: 毛皮以外 x${junkCount} (${formatPointsDelta(junkPenalty)})`
-    );
-  }
 }
 
 function processSubmissionChest(player) {
@@ -2412,9 +2504,9 @@ function buildRankingLines() {
 }
 
 function showRanking(title = "§6Return of BoxWorld 帰還ランキング") {
-  broadcast(title);
+  broadcast(title, { priority: "high" });
   for (const line of buildRankingLines()) {
-    broadcast(`§e${line}`);
+    broadcast(`§e${line}`, { priority: "high" });
   }
 }
 
@@ -2427,6 +2519,7 @@ function resetTimerState() {
   nextTimeNotifyWallMs = 0;
   announcedMilestones = new Set();
   resetEndCountdownSyncState();
+  resetUiBroadcastBudget();
 }
 
 /** 残り tick（実時間。マイクラポーズ中も Date.now() で進む） */
@@ -2786,11 +2879,11 @@ function notifyMilestones(remainingTicks) {
     announcedMilestones.add(sec);
 
     if (sec === 60) {
-      broadcast("§c§l[ゲート閉鎖まで残り1分!]");
+      broadcast("§c§l[ゲート閉鎖まで残り1分!]", { priority: "high" });
     } else if (sec === 30) {
-      broadcast("§c§l[残り30秒!]");
+      broadcast("§c§l[残り30秒!]", { priority: "high" });
     } else if (sec === 10) {
-      broadcast("§e§l[残り10秒!]");
+      broadcast("§e§l[残り10秒!]", { priority: "high" });
     }
   }
 }
@@ -2826,29 +2919,291 @@ function finishGame() {
   requestGameEnd(false);
 }
 
+function clearPendingRoundDeathRespawns() {
+  pendingRoundDeathRespawnIds.clear();
+  roundDeathRecoveryInProgress.clear();
+  roundDeathPenaltyAppliedIds.clear();
+  pendingRoundDeathPenaltyIds.clear();
+}
+
+function resolveRoundDeathPlayer(playerOrId) {
+  if (playerOrId?.isValid) return playerOrId;
+  const id = typeof playerOrId === "string" ? playerOrId : playerOrId?.id;
+  if (!id) return null;
+  return world.getPlayers().find((p) => p.id === id && p.isValid) ?? null;
+}
+
+function applyRoundDeathPenalty(playerOrId, fallbackName) {
+  if (gameState !== "running" || !activeRoundCenter) return false;
+
+  const playerId =
+    typeof playerOrId === "string" ? playerOrId : playerOrId?.id;
+  if (!playerId || roundDeathPenaltyAppliedIds.has(playerId)) return false;
+
+  const penalty = CONFIG.POINTS_PLAYER_DEATH ?? -10;
+  if (penalty === 0) {
+    roundDeathPenaltyAppliedIds.add(playerId);
+    return false;
+  }
+
+  const player = resolveRoundDeathPlayer(playerOrId);
+  if (!player) {
+    pendingRoundDeathPenaltyIds.add(playerId);
+    return false;
+  }
+
+  roundDeathPenaltyAppliedIds.add(playerId);
+  pendingRoundDeathPenaltyIds.delete(playerId);
+
+  const total = addReturnPoints(player, penalty);
+  const displayName = player.name ?? fallbackName ?? "?";
+  broadcast(
+    `§c${displayName}§fが倒れました！ ${formatPointsDelta(penalty)} §7(合計 ${total}pt)`
+  );
+  robwPlayerMessage(
+    player,
+    `§c死亡… ${formatPointsDelta(penalty)} §7開始地点へテレポートして復帰します。`
+  );
+  if (timerHudActive) {
+    refreshRemainingTimeHud();
+  }
+  logInfo(`player death penalty: ${displayName} (${penalty} pt, total ${total})`);
+  return true;
+}
+
+function getRoundStartTeleportTarget(player, center, dimension) {
+  const players = world.getPlayers().filter((p) => p?.isValid);
+  const index = Math.max(0, players.findIndex((p) => p.id === player.id));
+  const count = Math.max(1, players.length);
+  const baseY = center.y + 1;
+  const radius = Math.max(2, Math.ceil(Math.sqrt(count)));
+  const angle = (Math.PI * 2 * index) / count;
+  return {
+    location: {
+      x: center.x + 0.5 + Math.cos(angle) * radius,
+      y: baseY,
+      z: center.z + 0.5 + Math.sin(angle) * radius,
+    },
+    dimension,
+  };
+}
+
+function setPlayerRoundSpawnPoint(player, center, dimension) {
+  if (!player?.isValid || !center || !dimension) return false;
+  if (typeof player.setSpawnPoint !== "function") return false;
+
+  const { location } = getRoundStartTeleportTarget(player, center, dimension);
+  try {
+    player.setSpawnPoint({
+      dimension,
+      x: location.x,
+      y: location.y,
+      z: location.z,
+    });
+    return true;
+  } catch (error) {
+    logWarn(`setSpawnPoint failed for ${player.name}: ${error}`);
+    return false;
+  }
+}
+
+function rememberPlayerSpawnPointsBeforeRound() {
+  savedPlayerSpawnBeforeRound.clear();
+  for (const player of world.getPlayers()) {
+    if (!player?.isValid) continue;
+    try {
+      const spawn =
+        typeof player.getSpawnPoint === "function"
+          ? player.getSpawnPoint()
+          : undefined;
+      savedPlayerSpawnBeforeRound.set(player.id, spawn);
+    } catch {
+      savedPlayerSpawnBeforeRound.set(player.id, undefined);
+    }
+  }
+}
+
+function restorePlayerSpawnPointsAfterRound() {
+  for (const player of world.getPlayers()) {
+    if (!player?.isValid) continue;
+    if (!savedPlayerSpawnBeforeRound.has(player.id)) continue;
+    const spawn = savedPlayerSpawnBeforeRound.get(player.id);
+    try {
+      if (typeof player.setSpawnPoint === "function") {
+        player.setSpawnPoint(spawn);
+      }
+    } catch (error) {
+      logWarn(`restore spawn failed for ${player.name}: ${error}`);
+    }
+  }
+  savedPlayerSpawnBeforeRound.clear();
+}
+
+function enableRoundImmediateRespawn() {
+  try {
+    const rules = world.gameRules;
+    if (!rules || !("doImmediateRespawn" in rules)) return;
+    savedDoImmediateRespawn = rules.doImmediateRespawn;
+    rules.doImmediateRespawn = true;
+  } catch (error) {
+    logWarn(`doImmediateRespawn enable failed: ${error}`);
+  }
+}
+
+function disableRoundImmediateRespawn() {
+  try {
+    const rules = world.gameRules;
+    if (!rules || !("doImmediateRespawn" in rules)) return;
+    if (savedDoImmediateRespawn !== null) {
+      rules.doImmediateRespawn = savedDoImmediateRespawn;
+    }
+    savedDoImmediateRespawn = null;
+  } catch (error) {
+    logWarn(`doImmediateRespawn restore failed: ${error}`);
+  }
+}
+
+function restoreRoundRespawnSettings() {
+  restorePlayerSpawnPointsAfterRound();
+  disableRoundImmediateRespawn();
+}
+
+function isPlayerAtRoundStart(player) {
+  if (!player?.isValid || !activeRoundCenter) return false;
+  const dimension = getRoundStartDimension();
+  if (!dimension || player.dimension?.id !== dimension.id) return false;
+
+  const { location } = getRoundStartTeleportTarget(
+    player,
+    activeRoundCenter,
+    dimension
+  );
+  const dx = player.location.x - location.x;
+  const dy = player.location.y - location.y;
+  const dz = player.location.z - location.z;
+  return dx * dx + dy * dy + dz * dz <= 16;
+}
+
+function teleportPlayerToRoundStart(player, options = {}) {
+  if (!player?.isValid || !activeRoundCenter) return false;
+
+  const center = activeRoundCenter;
+  const dimension = getRoundStartDimension();
+  if (!dimension) return false;
+
+  if (options.updateSpawn !== false) {
+    setPlayerRoundSpawnPoint(player, center, dimension);
+  }
+
+  if (options.skipIfAlreadyThere && isPlayerAtRoundStart(player)) {
+    return true;
+  }
+
+  const { location } = getRoundStartTeleportTarget(player, center, dimension);
+  try {
+    player.teleport(location, { dimension, keepVelocity: false });
+    return true;
+  } catch (error) {
+    logWarn(`failed to respawn ${player.name} at round start: ${error}`);
+    return false;
+  }
+}
+
+/** ラウンド中の死亡 1 回につき、開始地点へ戻す処理を 1 系統だけ走らせる */
+function beginRoundDeathRecovery(playerOrId, options = {}) {
+  if (gameState !== "running" || !activeRoundCenter) return false;
+
+  const playerId =
+    typeof playerOrId === "string" ? playerOrId : playerOrId?.id;
+  if (!playerId || roundDeathRecoveryInProgress.has(playerId)) {
+    return false;
+  }
+
+  roundDeathRecoveryInProgress.add(playerId);
+  pendingRoundDeathRespawnIds.add(playerId);
+  applyRoundDeathPenalty(playerOrId, options.fallbackName);
+
+  const teleportNow = () => {
+    const live = resolveRoundDeathPlayer(playerId);
+    if (!live) return false;
+    return teleportPlayerToRoundStart(live);
+  };
+
+  teleportNow();
+
+  // 別ディメンション死亡などで即 TP できなかったときだけ、最大 2 回だけ再試行
+  for (const delay of [8, 25]) {
+    system.runTimeout(() => {
+      if (!roundDeathRecoveryInProgress.has(playerId)) return;
+      if (gameState !== "running" || !activeRoundCenter) return;
+      const live = resolveRoundDeathPlayer(playerId);
+      if (!live) return;
+      teleportPlayerToRoundStart(live, {
+        skipIfAlreadyThere: true,
+        updateSpawn: false,
+      });
+    }, delay);
+  }
+
+  system.runTimeout(() => {
+    roundDeathRecoveryInProgress.delete(playerId);
+    roundDeathPenaltyAppliedIds.delete(playerId);
+  }, 45);
+
+  return true;
+}
+
 function gatherAllPlayersToRoundStart(validation) {
   const players = world.getPlayers().filter((player) => player?.isValid);
   if (players.length <= 0) return;
 
   const center = validation.center;
   const dimension = validation.dimension;
-  const baseY = center.y + 1;
-  const radius = Math.max(2, Math.ceil(Math.sqrt(players.length)));
 
-  for (let i = 0; i < players.length; i++) {
-    const player = players[i];
-    const angle = (Math.PI * 2 * i) / players.length;
-    const target = {
-      x: center.x + 0.5 + Math.cos(angle) * radius,
-      y: baseY,
-      z: center.z + 0.5 + Math.sin(angle) * radius,
-    };
+  for (const player of players) {
+    setPlayerRoundSpawnPoint(player, center, dimension);
+    const { location } = getRoundStartTeleportTarget(player, center, dimension);
     try {
-      player.teleport(target, { dimension, keepVelocity: false });
+      player.teleport(location, { dimension, keepVelocity: false });
     } catch (error) {
       logWarn(`failed to gather ${player.name}: ${error}`);
     }
   }
+}
+
+function handlePlayerFatalRoundHurt(player) {
+  beginRoundDeathRecovery(player);
+}
+
+function handlePlayerRoundDeath(player, fallbackName) {
+  if (gameState !== "running" || !activeRoundCenter) return;
+  if (!player?.id) return;
+  beginRoundDeathRecovery(player, { fallbackName });
+}
+
+function handlePlayerRoundRespawn(player) {
+  if (gameState !== "running" || !player?.isValid || !activeRoundCenter) return;
+  if (!pendingRoundDeathRespawnIds.delete(player.id)) return;
+
+  if (pendingRoundDeathPenaltyIds.has(player.id)) {
+    applyRoundDeathPenalty(player);
+  }
+
+  system.runTimeout(() => {
+    if (!player?.isValid || gameState !== "running") return;
+    if (!isPlayerAtRoundStart(player)) {
+      teleportPlayerToRoundStart(player, { skipIfAlreadyThere: true });
+    }
+    const bones = giveRoundRespawnBones(player);
+    if (bones > 0) {
+      robwPlayerMessage(
+        player,
+        `§7開始地点に戻りました。§f骨 §7x${bones} §fを補充しました。`
+      );
+    } else {
+      robwPlayerMessage(player, "§7開始地点に戻りました。");
+    }
+  }, 5);
 }
 
 function beginGameRound(host, validation) {
@@ -2858,29 +3213,29 @@ function beginGameRound(host, validation) {
   nextTimeNotifyWallMs = startedMs + TIME_NOTIFY_INTERVAL_MS;
 
   broadcast(
-    "§aゲート起動！現世に迷い込んだハコイヌたちを、ボックスワールドへ帰してあげよう！"
+    `§aゲート起動！§f ${CONFIG.GATE_OPEN_MINUTES}分 | 骨で捕獲→足元の納品チェストへ`,
+    { priority: "high" }
   );
   broadcast(
-    `§fゲート開放時間: ${CONFIG.GATE_OPEN_MINUTES}分 | 骨で捕獲 -> 足元の納品チェストへ`
-  );
-  broadcast(
-    `§7ハコイヌを攻撃 §c${CONFIG.POINTS_HAKOINU_HIT}pt§7/回、倒すと §c${CONFIG.POINTS_HAKOINU_KILL}pt§7 / 別種納品 §c${CONFIG.POINTS_WRONG_ANIMAL}pt§7`
-  );
-  broadcast(
-    `§7開始地点: ${host.name} の位置 (${validation.center.x}, ${validation.center.y}, ${validation.center.z})`
+    `§7攻撃 ${CONFIG.POINTS_HAKOINU_HIT}pt/回 倒す ${CONFIG.POINTS_HAKOINU_KILL}pt 別種納品 ${CONFIG.POINTS_WRONG_ANIMAL}pt §7| 開始: ${host.name} (${validation.center.x}, ${validation.center.y}, ${validation.center.z})`,
+    { priority: "high" }
   );
 
   if (!prepareRoundStart(validation)) {
     gameState = "waiting";
     activeRoundCenter = null;
+    activeRoundDimension = null;
     activeSubmissionChestPos = null;
     placedChestRestore = null;
     clearRemainingTimeHud();
+    restoreRoundRespawnSettings();
     robwPlayerMessage(host,"§c納品チェストを設置できませんでした。地面の上で start してください。");
     logWarn("start rolled back: chest placement failed");
     return;
   }
 
+  rememberPlayerSpawnPointsBeforeRound();
+  enableRoundImmediateRespawn();
   gatherAllPlayersToRoundStart(validation);
 
   gameLoopId = system.runInterval(tickGameTimer, TICKS_PER_SECOND);
@@ -2945,6 +3300,7 @@ function startGame(initiator) {
   resetAllScores();
   resetTimerState();
   activeRoundCenter = validation.center;
+  activeRoundDimension = validation.dimension;
   applyDaytimeLock();
 
   runStartCountdown(host, validation, () => {
@@ -2974,6 +3330,8 @@ function stopGame() {
 function resetGame() {
   cancelStartCountdown();
   cancelEndCountdown();
+  clearPendingRoundDeathRespawns();
+  restoreRoundRespawnSettings();
   stopGameLoops();
   clearRemainingTimeHud();
   gameState = "waiting";
@@ -2985,6 +3343,7 @@ function resetGame() {
   const dimension = players.length > 0 ? players[0].dimension : undefined;
   clearSpawnedHakoinu(center, dimension);
   activeRoundCenter = null;
+  activeRoundDimension = null;
   if (players.length > 0) {
     removePlacedSubmissionChest(players[0].dimension);
   }
@@ -3158,7 +3517,6 @@ function tryOpenRobwMenuFromWand(player, itemStack) {
   if (!held || !isRobwWandItemType(held.typeId)) return false;
 
   if (!isSessionHost(player)) {
-    removeRobwWandsFromPlayer(player);
     robwPlayerMessage(player, "§c操作時計はホストだけが使えます。");
     return true;
   }
@@ -3206,11 +3564,7 @@ function playerHasStarterWand(player) {
     if (item.typeId === CONFIG.WAND_ITEM_CUSTOM) return true;
     if (item.typeId !== CONFIG.WAND_ITEM) continue;
     const name = stripFormatting(item.nameTag ?? "");
-    if (!name) continue;
-    if (
-      name === CONFIG.WAND_MENU_NAME ||
-      name.toLowerCase().startsWith("robw")
-    ) {
+    if (!name || name === CONFIG.WAND_MENU_NAME || name.toLowerCase().startsWith("robw")) {
       return true;
     }
   }
@@ -3278,14 +3632,21 @@ function tryGiveCustomControlItem(player) {
  */
 function giveStarterWand(player, options) {
   if (!player?.isValid) return;
+  const notifyIfOwned = options?.notifyIfOwned === true;
+
+  if (notifyIfOwned) {
+    claimSessionHost(player);
+  } else if (!getSessionHost()) {
+    claimSessionHost(player);
+  }
+
   if (!isSessionHost(player)) {
     removeRobwWandsFromPlayer(player);
-    if (options?.notifyIfOwned === true) {
+    if (notifyIfOwned) {
       robwPlayerMessage(player, "§c操作時計はホストだけが持てます。");
     }
     return;
   }
-  const notifyIfOwned = options?.notifyIfOwned === true;
 
   try {
     normalizeRobwWandNameTags(player);
@@ -3629,6 +3990,40 @@ function registerBoneInteractHandlers() {
   }
 }
 
+function registerPlayerDeathHandlers() {
+  const hurtSignal = world.afterEvents?.entityHurt;
+  if (hurtSignal) {
+    hurtSignal.subscribe((event) => {
+      system.run(() => {
+        if (gameState !== "running") return;
+        const hurt = event.hurtEntity;
+        if (!hurt?.isValid || hurt.typeId !== "minecraft:player") return;
+        const health = hurt.getComponent("health");
+        if (!health || health.currentValue > 0) return;
+        handlePlayerFatalRoundHurt(hurt);
+      });
+    });
+    logInfo("player round fatal hurt: afterEvents.entityHurt");
+  }
+
+  const dieSignal = world.afterEvents?.playerDie;
+  if (dieSignal) {
+    dieSignal.subscribe((event) => {
+      const dead = event.player;
+      const playerId = dead?.id;
+      const playerName = dead?.name;
+      system.run(() => {
+        if (!playerId) return;
+        const live = resolveRoundDeathPlayer(dead) ?? dead;
+        handlePlayerRoundDeath(live, playerName);
+      });
+    });
+    logInfo("player round death: afterEvents.playerDie");
+  } else {
+    logWarn("playerDie not available for round death penalty");
+  }
+}
+
 function registerHakoinuCombatHandlers() {
   const hurtSignal = world.afterEvents?.entityHurt;
   if (hurtSignal) {
@@ -3664,6 +4059,7 @@ function registerGameEvents() {
   registerBoneInteractHandlers();
   registerSubmissionChestHandler();
   registerHakoinuCombatHandlers();
+  registerPlayerDeathHandlers();
 
   const scriptEventSignal =
     system.afterEvents?.scriptEventReceive ??
@@ -3822,6 +4218,10 @@ world.afterEvents.playerSpawn.subscribe((event) => {
 
     const wasHostless = !sessionHostPlayerId;
     ensureSessionHostAssigned();
+
+    if (!event.initialSpawn) {
+      handlePlayerRoundRespawn(player);
+    }
 
     if (event.initialSpawn) {
       for (const line of getRobwHelpLines()) {

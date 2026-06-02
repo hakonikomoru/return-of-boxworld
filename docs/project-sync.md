@@ -3,7 +3,7 @@
 > ChatGPT / 他 AI 向けの同期用ドキュメント。実装前に読むこと。
 
 <!-- sync:auto:meta:start -->
-最終更新の想定リポジトリ: `hakonikomoru/return-of-boxworld`（`main`・`unknown`・2026-06-02・`npm run sync:project-docs` 自動反映）
+最終更新の想定リポジトリ: `hakonikomoru/return-of-boxworld`（`main`・`bc6b2c4`・2026-06-02・`npm run sync:project-docs` 自動反映）
 <!-- sync:auto:meta:end -->
 
 ---
