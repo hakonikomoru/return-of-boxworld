@@ -2826,6 +2826,31 @@ function finishGame() {
   requestGameEnd(false);
 }
 
+function gatherAllPlayersToRoundStart(validation) {
+  const players = world.getPlayers().filter((player) => player?.isValid);
+  if (players.length <= 0) return;
+
+  const center = validation.center;
+  const dimension = validation.dimension;
+  const baseY = center.y + 1;
+  const radius = Math.max(2, Math.ceil(Math.sqrt(players.length)));
+
+  for (let i = 0; i < players.length; i++) {
+    const player = players[i];
+    const angle = (Math.PI * 2 * i) / players.length;
+    const target = {
+      x: center.x + 0.5 + Math.cos(angle) * radius,
+      y: baseY,
+      z: center.z + 0.5 + Math.sin(angle) * radius,
+    };
+    try {
+      player.teleport(target, { dimension, keepVelocity: false });
+    } catch (error) {
+      logWarn(`failed to gather ${player.name}: ${error}`);
+    }
+  }
+}
+
 function beginGameRound(host, validation) {
   gameState = "running";
   const startedMs = Date.now();
@@ -2855,6 +2880,8 @@ function beginGameRound(host, validation) {
     logWarn("start rolled back: chest placement failed");
     return;
   }
+
+  gatherAllPlayersToRoundStart(validation);
 
   gameLoopId = system.runInterval(tickGameTimer, TICKS_PER_SECOND);
   startRemainingTimeHudLoop();
