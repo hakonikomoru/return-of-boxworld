@@ -3,18 +3,20 @@
 > ChatGPT / 他 AI 向けの同期用ドキュメント。実装前に読むこと。
 
 <!-- sync:auto:meta:start -->
+
 最終更新の想定リポジトリ: `hakonikomoru/return-of-boxworld`（`main`・`bc6b2c4`・2026-06-02・`npm run sync:project-docs` 自動反映）
+
 <!-- sync:auto:meta:end -->
 
 ---
 
 ## 1. 概要
 
-| 項目 | 内容 |
-|------|------|
-| リポジトリ | hakonikomoru/return-of-boxworld |
-| ローカルパス | `/Users/ebata/app/return-of-boxworld` |
-| 種別 | Minecraft Bedrock Script API アドオン（Return of BoxWorld MVP） |
+| 項目         | 内容                                                            |
+| ------------ | --------------------------------------------------------------- |
+| リポジトリ   | hakonikomoru/return-of-boxworld                                 |
+| ローカルパス | `/Users/ebata/app/return-of-boxworld`                           |
+| 種別         | Minecraft Bedrock Script API アドオン（Return of BoxWorld MVP） |
 
 ### ゲーム概要
 
@@ -27,6 +29,7 @@
 > `<!-- sync:auto:... -->` は **`npm run sync:project-docs`** が上書きします（手編集しない）。
 
 <!-- sync:auto:directory-tree:start -->
+
 ```
 return-of-boxworld/
 ├── behavior_packs/
@@ -53,6 +56,7 @@ return-of-boxworld/
 │   ├── verify-bedrock-pack.mjs
 │   └── watch-bedrock-world-pack.mjs
 ```
+
 <!-- sync:auto:directory-tree:end -->
 
 ---
@@ -62,17 +66,18 @@ return-of-boxworld/
 > 以下は **`main.js` の `CONFIG` から自動生成** されます。仕様を変えたら `npm run sync:project-docs` を実行（pre-commit でも更新）。
 
 <!-- sync:auto:game-rules:start -->
+
 > behavior_packs/robw_behavior/scripts/main.js の CONFIG から自動生成。仕様変更後は npm run sync:project-docs を実行。
 
 ### 用語
 
-| ゲーム内 | 実装 |
-|----------|------|
-| ハコイヌ | オオカミ（ハコイヌ代用） |
+| ゲーム内     | 実装                                                                    |
+| ------------ | ----------------------------------------------------------------------- |
+| ハコイヌ     | オオカミ（ハコイヌ代用）                                                |
 | 捕獲アイテム | minecraft:rabbit_hide（表示名: 捕獲した毛皮・正誤は見た目では区別不可） |
-| 納品チェスト | start したプレイヤーの足元に 1 つ設置 |
-| ラウンド中心 | start したプレイヤーの立ち位置（ハコイヌ出現の中心） |
-| 帰還ポイント | スコアボード `return_point` |
+| 納品チェスト | start したプレイヤーの足元に 1 つ設置                                   |
+| ラウンド中心 | start したプレイヤーの立ち位置（ハコイヌ出現の中心）                    |
+| 帰還ポイント | スコアボード `return_point`                                             |
 
 ### ゲート起動時（start）
 
@@ -96,12 +101,12 @@ return-of-boxworld/
 
 ### スコア
 
-| 内容 | 点数 |
-|------|------|
-| ハコイヌを納品チェストに入れる | **+1 pt** / 匹分 |
-| 別種の動物を納品チェストに入れる | **-2 pt** / 匹分 |
-| ハコイヌ（オオカミ）を倒す | **-10 pt** / 1 匹 |
-| ハコイヌ（オオカミ）を攻撃する | **-1 pt** / 1 回のダメージ |
+| 内容                             | 点数                       |
+| -------------------------------- | -------------------------- |
+| ハコイヌを納品チェストに入れる   | **+1 pt** / 匹分           |
+| 別種の動物を納品チェストに入れる | **-2 pt** / 匹分           |
+| ハコイヌ（オオカミ）を倒す       | **-10 pt** / 1 匹          |
+| ハコイヌ（オオカミ）を攻撃する   | **-1 pt** / 1 回のダメージ |
 
 ペナルティ対象の動物:
 
@@ -127,33 +132,33 @@ return-of-boxworld/
 
 ### CONFIG.BOX_GATE（フォールバック）
 
-| 項目 | 値 |
-|------|-----|
-| X | 0 |
-| Y | 86 |
-| Z | 0 |
-| 半径 | 3 |
+| 項目 | 値  |
+| ---- | --- |
+| X    | 0   |
+| Y    | 86  |
+| Z    | 0   |
+| 半径 | 3   |
 
 > 未起動時のフォールバック。通常は **start したプレイヤー位置** がラウンド中心になる。
 
 ### 操作・コマンド
 
-| 種別 | 入力 | 備考 |
-|------|------|------|
-| チャット | `!robw start` / `stop` / `reset` / `ranking` | **Beta APIs** 必須 |
-| 時計（minecraft:clock） | 名前 `ROBW:menu` を空中で右クリック | → `menu` |
-| 時計（minecraft:clock） | 名前 `ROBW:start` を空中で右クリック | → `menu` |
-| 時計（minecraft:clock） | 名前 `ROBW:stop` を空中で右クリック | → `stop` |
-| 時計（minecraft:clock） | 名前 `ROBW:reset` を空中で右クリック | → `reset` |
-| 時計（minecraft:clock） | 名前 `ROBW:ranking` を空中で右クリック | → `ranking` |
-| 関数 | `/function robw/give_wand` | チート ON |
-| 関数 | `/function robw/menu` | チート ON |
-| 関数 | `/function robw/ping` | チート ON |
-| 関数 | `/function robw/ranking` | チート ON |
-| 関数 | `/function robw/reset` | チート ON |
-| 関数 | `/function robw/start` | チート ON |
-| 関数 | `/function robw/stop` | チート ON |
-| scriptevent | `/scriptevent robw:start` 等 | チート ON |
+| 種別                    | 入力                                         | 備考               |
+| ----------------------- | -------------------------------------------- | ------------------ |
+| チャット                | `!robw start` / `stop` / `reset` / `ranking` | **Beta APIs** 必須 |
+| 時計（minecraft:clock） | 名前 `ROBW:menu` を空中で右クリック          | → `menu`           |
+| 時計（minecraft:clock） | 名前 `ROBW:start` を空中で右クリック         | → `menu`           |
+| 時計（minecraft:clock） | 名前 `ROBW:stop` を空中で右クリック          | → `stop`           |
+| 時計（minecraft:clock） | 名前 `ROBW:reset` を空中で右クリック         | → `reset`          |
+| 時計（minecraft:clock） | 名前 `ROBW:ranking` を空中で右クリック       | → `ranking`        |
+| 関数                    | `/function robw/give_wand`                   | チート ON          |
+| 関数                    | `/function robw/menu`                        | チート ON          |
+| 関数                    | `/function robw/ping`                        | チート ON          |
+| 関数                    | `/function robw/ranking`                     | チート ON          |
+| 関数                    | `/function robw/reset`                       | チート ON          |
+| 関数                    | `/function robw/start`                       | チート ON          |
+| 関数                    | `/function robw/stop`                        | チート ON          |
+| scriptevent             | `/scriptevent robw:start` 等                 | チート ON          |
 
 ### ゲーム状態
 

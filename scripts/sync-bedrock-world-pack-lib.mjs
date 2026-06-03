@@ -80,7 +80,7 @@ function upsertWorldPackVersion(jsonPath, packId, version) {
     writeFileSync(
       jsonPath,
       `${JSON.stringify([{ pack_id: packId, version }], null, "\t")}\n`,
-      "utf8"
+      "utf8",
     );
     return true;
   }
@@ -119,7 +119,7 @@ export function syncWorldBehaviorPackVersion(worldDir, version) {
   return upsertWorldPackVersion(
     join(worldDir, "world_behavior_packs.json"),
     ROBW_BEHAVIOR_PACK_ID,
-    version
+    version,
   );
 }
 
@@ -131,7 +131,7 @@ export function syncWorldResourcePackVersion(worldDir, version) {
   return upsertWorldPackVersion(
     join(worldDir, "world_resource_packs.json"),
     ROBW_RESOURCE_PACK_ID,
-    version
+    version,
   );
 }
 
@@ -178,21 +178,17 @@ export function syncBedrockWorldPack(options = {}) {
     if (existsSync(resourceSrc)) {
       copyPackDir(resourceSrc, resourceDest, log);
       if (syncWorldResourcePackVersion(worldDir, resourceVersion)) {
-        log(
-          `Updated world_resource_packs.json -> ${resourceVersion.join(".")} (${worldDir})`
-        );
+        log(`Updated world_resource_packs.json -> ${resourceVersion.join(".")} (${worldDir})`);
       }
     }
 
     if (syncWorldBehaviorPackVersion(worldDir, behaviorVersion)) {
-      log(
-        `Updated world_behavior_packs.json -> ${behaviorVersion.join(".")} (${worldDir})`
-      );
+      log(`Updated world_behavior_packs.json -> ${behaviorVersion.join(".")} (${worldDir})`);
     }
   }
 
   log(
-    `Done (BP v${behaviorVersion.join(".")}, RP v${resourceVersion.join(".")}). Quit Minecraft fully, toggle packs OFF/ON.`
+    `Done (BP v${behaviorVersion.join(".")}, RP v${resourceVersion.join(".")}). Quit Minecraft fully, toggle packs OFF/ON.`,
   );
   return {
     ok: true,

@@ -20,11 +20,15 @@
     "tail:bedrock-log:robw": "node scripts/tail-bedrock-log.mjs --robw",
     "tail:bedrock-log:mirror": "node scripts/tail-bedrock-log.mjs --mirror",
     "tail:bedrock-log:gui": "node scripts/tail-bedrock-log.mjs --mirror --clipboard",
-    "diagnose:bedrock-log": "node scripts/diagnose-bedrock-log.mjs"
+    "diagnose:bedrock-log": "node scripts/diagnose-bedrock-log.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "precommit:check": "npm run lint && npm run format:check && npm run test"
   },
   "devDependencies": {
     "@eslint/js": "^9.28.0",
     "eslint": "^9.28.0",
-    "globals": "^16.2.0"
+    "globals": "^16.2.0",
+    "prettier": "^3.8.3"
   }
 }

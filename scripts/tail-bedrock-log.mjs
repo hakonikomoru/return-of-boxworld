@@ -28,8 +28,7 @@ const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const args = new Set(process.argv.slice(2));
 const robwOnly = args.has("--robw");
 const mirror = args.has("--mirror");
-const clipboard =
-  !args.has("--no-clipboard") && (mirror || args.has("--clipboard"));
+const clipboard = !args.has("--no-clipboard") && (mirror || args.has("--clipboard"));
 const mirrorPath = join(repoRoot, "logs", "bedrock-content.log");
 
 let mirrorInitialized = false;
@@ -61,7 +60,7 @@ function collectLogDirs() {
       localAppData,
       "Packages",
       "Microsoft.MinecraftUWP_8wekyb3d8bbwe",
-      "LocalState"
+      "LocalState",
     );
     if (existsSync(uwp)) {
       dirs.add(join(uwp, "logs"));
@@ -73,10 +72,7 @@ function collectLogDirs() {
 
 function isContentLogFile(name) {
   const lower = name.toLowerCase();
-  return (
-    lower.endsWith(".log") ||
-    (lower.startsWith("contentlog") && lower.endsWith(".txt"))
-  );
+  return lower.endsWith(".log") || (lower.startsWith("contentlog") && lower.endsWith(".txt"));
 }
 
 function findLatestLogFile() {
@@ -108,9 +104,7 @@ function findLatestLogFile() {
 
 function shouldPrint(line) {
   if (!robwOnly) return true;
-  return /\[ROBW\]|robw:|scriptevent|Script|\[INFO\]|\[WARN\]|\[ERROR\]|\[ゲーム内\]/i.test(
-    line
-  );
+  return /\[ROBW\]|robw:|scriptevent|Script|\[INFO\]|\[WARN\]|\[ERROR\]|\[ゲーム内\]/i.test(line);
 }
 
 function ensureMirror() {
@@ -128,8 +122,7 @@ function ensureMirror() {
 }
 
 function emit(line, source = "file") {
-  const prefix =
-    source === "gui" ? "[gui] " : source === "file" ? "" : `[${source}] `;
+  const prefix = source === "gui" ? "[gui] " : source === "file" ? "" : `[${source}] `;
   const body = `${prefix}${line}`;
   if (!shouldPrint(body)) return;
   const text = body.endsWith("\n") ? body : `${body}\n`;

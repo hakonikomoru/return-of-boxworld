@@ -8,9 +8,7 @@
     "min_engine_version": [1, 21, 0]
   },
   "metadata": {
-    "authors": [
-      "komolabo - こもらぼ -"
-    ]
+    "authors": ["komolabo - こもらぼ -"]
   },
   "modules": [
     {

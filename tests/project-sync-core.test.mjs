@@ -24,10 +24,7 @@ describe("replaceMarkedSection", () => {
   });
 
   it("throws when markers are missing", () => {
-    assert.throws(
-      () => replaceMarkedSection("no markers", id, "x"),
-      /Missing sync markers/,
-    );
+    assert.throws(() => replaceMarkedSection("no markers", id, "x"), /Missing sync markers/);
   });
 });
 

@@ -33,9 +33,7 @@ globalThis.robwShowActionMenu = (player, statePlain, onSelect) => {
         system.run(() => {
           if (!player.isValid) return;
           if (response.canceled || response.selection === undefined) {
-            console.warn(
-              "[INFO] [ゲーム内] " + player.name + ": [ROBW] メニューを閉じました"
-            );
+            console.warn("[INFO] [ゲーム内] " + player.name + ": [ROBW] メニューを閉じました");
             player.sendMessage("§7[ROBW] メニューを閉じました");
             return;
           }
@@ -48,9 +46,7 @@ globalThis.robwShowActionMenu = (player, statePlain, onSelect) => {
         system.run(() => {
           if (!player.isValid) return;
           console.warn(`[ROBW] menu form failed: ${error}`);
-          console.warn(
-            `[INFO] [ゲーム内] ${player.name}: [ROBW] メニューUIを開けませんでした`
-          );
+          console.warn(`[INFO] [ゲーム内] ${player.name}: [ROBW] メニューUIを開けませんでした`);
           player.sendMessage("§c[ROBW] メニューUIを開けませんでした");
         });
       });

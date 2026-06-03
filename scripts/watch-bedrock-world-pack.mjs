@@ -31,7 +31,7 @@ function runSync(reason) {
     const result = syncBedrockWorldPack({ worldName });
     if (!result.ok) {
       console.warn(
-        `[${timestamp()}] sync skipped: no world with ROBW pack. Run install + apply pack in world settings.`
+        `[${timestamp()}] sync skipped: no world with ROBW pack. Run install + apply pack in world settings.`,
       );
     }
   } catch (error) {
@@ -65,14 +65,10 @@ console.log("Press Ctrl+C to stop.\n");
 runSync("initial");
 
 try {
-  watch(
-    watchRoot,
-    { recursive: true },
-    (_eventType, filename) => {
-      if (filename && /(^|[\\/])\.[^\\/]+/.test(filename)) return;
-      scheduleSync(filename ?? "change");
-    }
-  );
+  watch(watchRoot, { recursive: true }, (_eventType, filename) => {
+    if (filename && /(^|[\\/])\.[^\\/]+/.test(filename)) return;
+    scheduleSync(filename ?? "change");
+  });
 } catch (error) {
   console.warn(`Recursive watch unavailable (${error}). Falling back to non-recursive.`);
   watch(watchRoot, () => scheduleSync("change"));

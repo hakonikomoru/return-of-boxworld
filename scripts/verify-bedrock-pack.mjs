@@ -9,15 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const repoPack = join(repoRoot, "behavior_packs", "robw_behavior");
-const requiredMcfunctions = [
-  "start",
-  "stop",
-  "reset",
-  "ranking",
-  "menu",
-  "give_wand",
-  "ping",
-];
+const requiredMcfunctions = ["start", "stop", "reset", "ranking", "menu", "give_wand", "ping"];
 
 function checkPackRoot(label, packRoot) {
   console.log(`\n=== ${label} ===`);
@@ -61,7 +53,7 @@ const appData = process.env.APPDATA;
 if (appData) {
   const bedrockUsers = join(appData, "Minecraft Bedrock", "Users");
   const deployRoots = [
-  join(bedrockUsers, "Shared", "games", "com.mojang", "behavior_packs", "robw_behavior"),
+    join(bedrockUsers, "Shared", "games", "com.mojang", "behavior_packs", "robw_behavior"),
   ];
   if (existsSync(bedrockUsers)) {
     for (const name of readdirSync(bedrockUsers)) {
@@ -72,7 +64,7 @@ if (appData) {
         "games",
         "com.mojang",
         "behavior_packs",
-        "robw_behavior"
+        "robw_behavior",
       );
       if (existsSync(join(bedrockUsers, name))) deployRoots.push(userBp);
     }
@@ -83,7 +75,9 @@ if (appData) {
     }
   }
   if (!deployRoots.some((p) => existsSync(p))) {
-    console.log("\n[WARN] No deployed robw_behavior junction found. Run: npm run install:bedrock-pack");
+    console.log(
+      "\n[WARN] No deployed robw_behavior junction found. Run: npm run install:bedrock-pack",
+    );
     allOk = false;
   }
 } else {

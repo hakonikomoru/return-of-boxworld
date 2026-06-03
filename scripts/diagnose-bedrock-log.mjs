@@ -7,10 +7,7 @@ import { join } from "node:path";
 
 function isContentLogFile(name) {
   const lower = name.toLowerCase();
-  return (
-    lower.endsWith(".log") ||
-    (lower.startsWith("contentlog") && lower.endsWith(".txt"))
-  );
+  return lower.endsWith(".log") || (lower.startsWith("contentlog") && lower.endsWith(".txt"));
 }
 
 function collectLogDirs() {
@@ -38,7 +35,7 @@ function collectLogDirs() {
       localAppData,
       "Packages",
       "Microsoft.MinecraftUWP_8wekyb3d8bbwe",
-      "LocalState"
+      "LocalState",
     );
     if (existsSync(uwp)) {
       dirs.add(join(uwp, "logs"));

@@ -3,13 +3,7 @@
  * Minecraft Bedrock Edition Script API
  */
 
-import {
-  world,
-  system,
-  ItemStack,
-  WeatherType,
-  DisplaySlotId,
-} from "@minecraft/server";
+import { world, system, ItemStack, WeatherType, DisplaySlotId } from "@minecraft/server";
 
 import "./menu-ui.js";
 
@@ -53,11 +47,7 @@ const CONFIG = {
   /** 撤去する落とし物エンティティの typeId */
   DROPPED_ITEM_ENTITY_TYPES: ["minecraft:item"],
   /** 撤去対象とする収納ブロック（通常は変更不要） */
-  SUBMISSION_CHEST_BLOCK_TYPES: [
-    "minecraft:chest",
-    "minecraft:trapped_chest",
-    "minecraft:barrel",
-  ],
+  SUBMISSION_CHEST_BLOCK_TYPES: ["minecraft:chest", "minecraft:trapped_chest", "minecraft:barrel"],
   /** 互換用（現在ほぼ未使用） */
   GATE_SUMMON_OFFSET_Y: 0,
   /** ラウンド開始時に全員へ渡す骨の数（所持分はいったん消してから配布） */
@@ -189,8 +179,7 @@ const SUBMISSION_CREDIT_WINDOW_TICKS = 15 * TICKS_PER_SECOND;
 const SUBMISSION_PROCESS_DELAYS = [5, 20, 40, 60, 100, 150];
 const GATE_OPEN_TICKS = CONFIG.GATE_OPEN_MINUTES * 60 * TICKS_PER_SECOND;
 const GATE_OPEN_MS = CONFIG.GATE_OPEN_MINUTES * 60 * 1000;
-const TIME_NOTIFY_INTERVAL_MS =
-  CONFIG.TIME_NOTIFY_INTERVAL_SECONDS * 1000;
+const TIME_NOTIFY_INTERVAL_MS = CONFIG.TIME_NOTIFY_INTERVAL_SECONDS * 1000;
 /** 1 tick あたりの実時間（ms）。制限時間は実時間で進める（ポーズ中も経過） */
 const MS_PER_TICK = 1000 / TICKS_PER_SECOND;
 const DAYTIME_LOCK_INTERVAL_TICKS = 200;
@@ -386,10 +375,7 @@ function startDaytimeLockLoop() {
   if (!CONFIG.LOCK_DAYTIME) return;
   applyDaytimeLock();
   if (daylightLockLoopId !== undefined) return;
-  daylightLockLoopId = system.runInterval(
-    applyDaytimeLock,
-    DAYTIME_LOCK_INTERVAL_TICKS
-  );
+  daylightLockLoopId = system.runInterval(applyDaytimeLock, DAYTIME_LOCK_INTERVAL_TICKS);
   logInfo("daytime lock enabled (clear weather, fixed noon)");
 }
 
@@ -494,10 +480,7 @@ function showCeremonyPresentation(step, stepTicks = CONFIG.START_COUNTDOWN_STEP_
 function spawnCountdownBurst(dimension, center) {
   if (!center) return;
   const loc = { x: center.x + 0.5, y: center.y + 1, z: center.z + 0.5 };
-  const particles = [
-    "minecraft:totem_particle",
-    "minecraft:villager_happy",
-  ];
+  const particles = ["minecraft:totem_particle", "minecraft:villager_happy"];
   for (const id of particles) {
     try {
       dimension.spawnParticle(id, loc);
@@ -799,10 +782,7 @@ function getObjective() {
   const board = world.scoreboard;
   let objective = board.getObjective(CONFIG.SCORE_OBJECTIVE);
   if (!objective) {
-    objective = board.addObjective(
-      CONFIG.SCORE_OBJECTIVE,
-      "帰還ポイント"
-    );
+    objective = board.addObjective(CONFIG.SCORE_OBJECTIVE, "帰還ポイント");
     logInfo(`scoreboard objective created: ${CONFIG.SCORE_OBJECTIVE}`);
   }
   return objective;
@@ -1019,11 +999,7 @@ function clearSpawnedRoundEntities() {
 }
 
 function getEndHakoinuCleanupRadius() {
-  return (
-    CONFIG.SPAWN_MAX_DISTANCE +
-    (CONFIG.SPAWN_NEAR_PLAYER_MAX_DISTANCE ?? 18) +
-    12
-  );
+  return CONFIG.SPAWN_MAX_DISTANCE + (CONFIG.SPAWN_NEAR_PLAYER_MAX_DISTANCE ?? 18) + 12;
 }
 
 function getRoundItemCleanupRadius() {
@@ -1059,9 +1035,7 @@ function clearDroppedItemsNearRoundCenter(center, dimension) {
     logWarn(`clearDroppedItemsNearRoundCenter failed: ${error}`);
   }
   if (removed > 0) {
-    logInfo(
-      `cleared ${removed} dropped item(s) within ${radius} blocks of round center`
-    );
+    logInfo(`cleared ${removed} dropped item(s) within ${radius} blocks of round center`);
   }
   return removed;
 }
@@ -1102,7 +1076,7 @@ function clearSpawnedHakoinu(center, dimension) {
   clearDroppedItemsNearRoundCenter(center, dimension);
   if (wolves > 0) {
     logInfo(
-      `cleared ${wolves} hakoinu within ${getEndHakoinuCleanupRadius()} blocks of round center`
+      `cleared ${wolves} hakoinu within ${getEndHakoinuCleanupRadius()} blocks of round center`,
     );
   }
 }
@@ -1129,10 +1103,7 @@ function randomSpawnLocationNearAnchor(anchor, usePlayerRing = false) {
 }
 
 function randomSpawnLocationNearGate(gate) {
-  return randomSpawnLocationNearAnchor(
-    { x: gate.x + 0.5, y: gate.y, z: gate.z + 0.5 },
-    false
-  );
+  return randomSpawnLocationNearAnchor({ x: gate.x + 0.5, y: gate.y, z: gate.z + 0.5 }, false);
 }
 
 function trySpawnRoundEntity(dimension, entityType, location) {
@@ -1168,7 +1139,7 @@ function trySpawnRoundEntityAtCandidates(dimension, entityType, makeBaseLocation
 
 function trySpawnRoundEntityNearGate(dimension, entityType, gate) {
   const ok = trySpawnRoundEntityAtCandidates(dimension, entityType, () =>
-    randomSpawnLocationNearGate(gate)
+    randomSpawnLocationNearGate(gate),
   );
   if (!ok) {
     logWarn(`spawn ${entityType} failed near gate`);
@@ -1186,7 +1157,7 @@ function trySpawnRoundEntityNearPlayer(dimension, entityType, player) {
   }
   const anchor = { x: loc.x, y: loc.y, z: loc.z };
   return trySpawnRoundEntityAtCandidates(dimension, entityType, () =>
-    randomSpawnLocationNearAnchor(anchor, true)
+    randomSpawnLocationNearAnchor(anchor, true),
   );
 }
 
@@ -1246,7 +1217,7 @@ function removeSpawnedRoundEntityRef(entityOrId) {
 
 function pruneSpawnedRoundEntityIds() {
   spawnedRoundEntityIds = spawnedRoundEntityIds.filter(
-    (entityId) => inspectSpawnedRoundEntity(entityId) !== null
+    (entityId) => inspectSpawnedRoundEntity(entityId) !== null,
   );
 }
 
@@ -1306,7 +1277,7 @@ function spawnRoundAnimalsAtGate(dimension, targets) {
   }
 
   logInfo(
-    `spawned hakoinu=${hakoinuSpawned}/${targetHakoinu} penalty=${penaltySpawned}/${targetPenalty} (near players=${CONFIG.SPAWN_NEAR_PLAYERS !== false})`
+    `spawned hakoinu=${hakoinuSpawned}/${targetHakoinu} penalty=${penaltySpawned}/${targetPenalty} (near players=${CONFIG.SPAWN_NEAR_PLAYERS !== false})`,
   );
   return { hakoinuSpawned, penaltySpawned };
 }
@@ -1369,10 +1340,7 @@ function replenishRoundSpawns(dimension) {
 
   const counts = countActiveRoundSpawns();
   const needHakoinu = Math.max(0, CONFIG.START_SPAWN_HAKOINU - counts.hakoinu);
-  const needPenalty = Math.max(
-    0,
-    CONFIG.START_SPAWN_PENALTY_ANIMALS - counts.penalty
-  );
+  const needPenalty = Math.max(0, CONFIG.START_SPAWN_PENALTY_ANIMALS - counts.penalty);
 
   for (let i = 0; i < needHakoinu && budget > 0; i++) {
     if (trySpawnRoundEntityForRound(dimension, hakoinuType)) {
@@ -1391,7 +1359,7 @@ function replenishRoundSpawns(dimension) {
   if (spawned > 0) {
     const after = countActiveRoundSpawns();
     logInfo(
-      `spawn replenish +${spawned} (hakoinu=${after.hakoinu}/${CONFIG.START_SPAWN_HAKOINU} penalty=${after.penalty}/${CONFIG.START_SPAWN_PENALTY_ANIMALS})`
+      `spawn replenish +${spawned} (hakoinu=${after.hakoinu}/${CONFIG.START_SPAWN_HAKOINU} penalty=${after.penalty}/${CONFIG.START_SPAWN_PENALTY_ANIMALS})`,
     );
   }
 }
@@ -1428,10 +1396,7 @@ function startSpawnReplenishLoop() {
   if (!CONFIG.SPAWN_REPLENISH_ENABLED) return;
   if (spawnReplenishLoopId !== undefined) return;
   const intervalSec = Math.max(1, CONFIG.SPAWN_REPLENISH_INTERVAL_SECONDS ?? 4);
-  spawnReplenishLoopId = system.runInterval(
-    tickSpawnReplenish,
-    intervalSec * TICKS_PER_SECOND
-  );
+  spawnReplenishLoopId = system.runInterval(tickSpawnReplenish, intervalSec * TICKS_PER_SECOND);
 }
 
 /** @deprecated 互換エイリアス */
@@ -1468,9 +1433,7 @@ function resetPlayerToLobbyInventory(player) {
   if (isSessionHost(player)) {
     const removed = clearInventoryExceptWand(player);
     if (removed > 0) {
-      logInfo(
-        `lobby inventory for ${player.name}: removed ${removed} slot(s), kept wand only`
-      );
+      logInfo(`lobby inventory for ${player.name}: removed ${removed} slot(s), kept wand only`);
     }
   } else {
     clearPlayerInventoryCompletely(player);
@@ -1549,7 +1512,7 @@ function giveStartKit(player) {
     const cleared = clearInventoryExceptWand(player);
     if (cleared > 0) {
       logInfo(
-        `cleared ${cleared} inventory slot(s) for ${player.name} (kept wand, will give bones)`
+        `cleared ${cleared} inventory slot(s) for ${player.name} (kept wand, will give bones)`,
       );
     }
   } else {
@@ -1619,9 +1582,7 @@ function getSessionHost() {
   }
 
   if (sessionHostPlayerName) {
-    const byName = world.getPlayers().find(
-      (p) => p?.isValid && p.name === sessionHostPlayerName
-    );
+    const byName = world.getPlayers().find((p) => p?.isValid && p.name === sessionHostPlayerName);
     if (byName) {
       sessionHostPlayerId = byName.id;
       logInfo(`session host restored by name: ${byName.name}`);
@@ -1764,8 +1725,7 @@ function validateRoundStartAtPlayer(player) {
   if (heightAboveGround < -0.2 || heightAboveGround > 1.25) {
     return {
       ok: false,
-      message:
-        "§c地面の上で start してください。(空中や足場の下では開始できません)",
+      message: "§c地面の上で start してください。(空中や足場の下では開始できません)",
       reason: "off_ground",
     };
   }
@@ -1852,9 +1812,7 @@ function removeExtraChestsInArea(dimension, centerX, centerZ, radius, minY, maxY
     for (const typeId of CONFIG.SUBMISSION_CHEST_BLOCK_TYPES) {
       const blockName = typeId.replace("minecraft:", "");
       try {
-        dimension.runCommand(
-          `fill ${x1} ${y1} ${z1} ${x2} ${y2} ${z2} air replace ${blockName}`
-        );
+        dimension.runCommand(`fill ${x1} ${y1} ${z1} ${x2} ${y2} ${z2} air replace ${blockName}`);
       } catch (error) {
         logWarn(`fill replace ${blockName} failed: ${error}`);
       }
@@ -1883,7 +1841,7 @@ function removeExtraChestsInArea(dimension, centerX, centerZ, radius, minY, maxY
 
   if (removed > 0) {
     logInfo(
-      `removed ${removed} extra chest(s) near (${baseX}, ${baseZ}) r=${radius} y=${y1}..${y2}`
+      `removed ${removed} extra chest(s) near (${baseX}, ${baseZ}) r=${radius} y=${y1}..${y2}`,
     );
   }
   return removed;
@@ -1903,10 +1861,7 @@ function removePlacedSubmissionChest(dimension) {
 
   try {
     const block = dim.getBlock({ x, y, z });
-    if (
-      block &&
-      CONFIG.SUBMISSION_CHEST_BLOCK_TYPES.includes(block.typeId)
-    ) {
+    if (block && CONFIG.SUBMISSION_CHEST_BLOCK_TYPES.includes(block.typeId)) {
       setBlockTypeAt(dim, { x, y, z }, typeId || "minecraft:air");
     }
   } catch (error) {
@@ -1928,14 +1883,12 @@ function placeSubmissionChest(dimension, spot) {
     spot.z,
     CONFIG.CHEST_CLEANUP_RADIUS,
     cleanup.minY,
-    cleanup.maxY
+    cleanup.maxY,
   );
 
   const before = dimension.getBlock({ x: spot.x, y: spot.y, z: spot.z });
   if (!before?.isAir) {
-    logWarn(
-      `submission chest blocked at (${spot.x}, ${spot.y}, ${spot.z}) type=${before?.typeId}`
-    );
+    logWarn(`submission chest blocked at (${spot.x}, ${spot.y}, ${spot.z}) type=${before?.typeId}`);
     return false;
   }
 
@@ -1950,12 +1903,8 @@ function placeSubmissionChest(dimension, spot) {
   setBlockTypeAt(dimension, { x: spot.x, y: spot.y, z: spot.z }, "minecraft:chest");
   activeSubmissionChestPos = { x: spot.x, y: spot.y, z: spot.z };
 
-  broadcast(
-    `§b納品チェストを足元に設置しました: (${spot.x}, ${spot.y}, ${spot.z})`
-  );
-  logInfo(
-    `submission chest placed at (${spot.x}, ${spot.y}, ${spot.z}) footY=${spot.footY}`
-  );
+  broadcast(`§b納品チェストを足元に設置しました: (${spot.x}, ${spot.y}, ${spot.z})`);
+  logInfo(`submission chest placed at (${spot.x}, ${spot.y}, ${spot.z}) footY=${spot.footY}`);
   return true;
 }
 
@@ -1974,7 +1923,7 @@ function prepareRoundStart(validation) {
     center.z,
     CONFIG.CHEST_CLEANUP_RADIUS,
     cleanup.minY,
-    cleanup.maxY
+    cleanup.maxY,
   );
   clearDroppedItemsNearRoundCenter(center, dimension);
 
@@ -1988,7 +1937,7 @@ function prepareRoundStart(validation) {
   }
 
   broadcast(
-    `§f骨を §7x${CONFIG.START_GIVE_BONES} §fにリセット、§fハコイヌ §7${spawned.hakoinuSpawned} 匹§7 / §c別種 §7${spawned.penaltySpawned} 匹§fを §7半径 ${CONFIG.SPAWN_MIN_DISTANCE}~${CONFIG.SPAWN_MAX_DISTANCE} §fに出現！`
+    `§f骨を §7x${CONFIG.START_GIVE_BONES} §fにリセット、§fハコイヌ §7${spawned.hakoinuSpawned} 匹§7 / §c別種 §7${spawned.penaltySpawned} 匹§fを §7半径 ${CONFIG.SPAWN_MIN_DISTANCE}~${CONFIG.SPAWN_MAX_DISTANCE} §fに出現！`,
   );
   return true;
 }
@@ -2016,14 +1965,7 @@ function findNearestProtectableAnimal(player) {
     if (!isHakoinuEntity(entity) && !isPenaltyAnimalEntity(entity)) continue;
 
     const el = entity.location;
-    const distSq = distanceSq(
-      location.x,
-      location.y,
-      location.z,
-      el.x,
-      el.y,
-      el.z
-    );
+    const distSq = distanceSq(location.x, location.y, location.z, el.x, el.y, el.z);
     if (distSq < nearestDistSq) {
       nearestDistSq = distSq;
       nearest = entity;
@@ -2040,14 +1982,15 @@ function canCaptureInCurrentGame() {
 function sendCaptureBlockedMessage(player) {
   switch (gameState) {
     case "countdown":
-      robwPlayerMessage(player,"§c起動カウントダウン中は捕獲できません。");
+      robwPlayerMessage(player, "§c起動カウントダウン中は捕獲できません。");
       break;
     case "closing":
-      robwPlayerMessage(player,"§cゲート閉鎖中は捕獲できません。");
+      robwPlayerMessage(player, "§cゲート閉鎖中は捕獲できません。");
       break;
     default:
-      robwPlayerMessage(player,
-        `§cゲート停止中は捕獲できません。${CONFIG.CHAT_PREFIX} start で起動してください。`
+      robwPlayerMessage(
+        player,
+        `§cゲート停止中は捕獲できません。${CONFIG.CHAT_PREFIX} start で起動してください。`,
       );
       break;
   }
@@ -2081,7 +2024,7 @@ function tryProtectHakoinu(player, preferredTarget) {
     target = findNearestProtectableAnimal(player);
   }
   if (!target) {
-    robwPlayerMessage(player,"§7近くにハコイヌや動物がいません。");
+    robwPlayerMessage(player, "§7近くにハコイヌや動物がいません。");
     return;
   }
 
@@ -2093,9 +2036,7 @@ function tryProtectHakoinu(player, preferredTarget) {
 
   const entityId = target.id;
   const entityType = target.typeId;
-  const kind = CONFIG.HAKOINU_ENTITY_TYPES.includes(entityType)
-    ? "hakoinu"
-    : "wrong";
+  const kind = CONFIG.HAKOINU_ENTITY_TYPES.includes(entityType) ? "hakoinu" : "wrong";
 
   if (boneCost > 0) {
     const consumed = consumeItemFromInventory(player, CONFIG.PROTECT_ITEM, boneCost);
@@ -2113,7 +2054,7 @@ function tryProtectHakoinu(player, preferredTarget) {
   const chest = getActiveSubmissionChestPos();
   robwPlayerMessage(
     player,
-    `§a毛皮を手に入れた！ §7${CONFIG.RETURN_BOX_DISPLAY_NAME} を納品チェスト (${chest.x}, ${chest.y}, ${chest.z}) に入れてください。`
+    `§a毛皮を手に入れた！ §7${CONFIG.RETURN_BOX_DISPLAY_NAME} を納品チェスト (${chest.x}, ${chest.y}, ${chest.z}) に入れてください。`,
   );
   logInfo(`${kind} captured by ${player.name} (entity ${entityId}, ${entityType})`);
   spawnAfterCapture(player);
@@ -2147,10 +2088,7 @@ function isRoundSpawnedHakoinuEntity(entityId, typeId) {
 function applyHakoinuCombatPenalty(player, points, message) {
   if (!player?.isValid || points === 0) return;
   const total = addReturnPoints(player, points);
-  robwPlayerMessage(
-    player,
-    `${message} ${formatPointsDelta(points)} §7(合計 ${total}pt)`
-  );
+  robwPlayerMessage(player, `${message} ${formatPointsDelta(points)} §7(合計 ${total}pt)`);
   if (timerHudActive) {
     refreshRemainingTimeHud();
   }
@@ -2176,11 +2114,7 @@ function handleHakoinuRoundHurt(hurtEntity, damageSource) {
   const attacker = resolveKillAttributionPlayer(damageSource);
   if (!attacker?.isValid) return;
 
-  applyHakoinuCombatPenalty(
-    attacker,
-    penalty,
-    "§cハコイヌを攻撃してしまった！"
-  );
+  applyHakoinuCombatPenalty(attacker, penalty, "§cハコイヌを攻撃してしまった！");
   logInfo(`hakoinu hit by ${attacker.name} (${penalty} pts, entity ${entityId})`);
 }
 
@@ -2212,7 +2146,7 @@ function handleHakoinuRoundDeath(deadEntity, damageSource) {
   if (killer?.isValid) {
     const total = addReturnPoints(killer, penalty);
     broadcast(
-      `§c${killer.name}§fがハコイヌを倒してしまった！ ${formatPointsDelta(penalty)} §7(合計 ${total}pt)`
+      `§c${killer.name}§fがハコイヌを倒してしまった！ ${formatPointsDelta(penalty)} §7(合計 ${total}pt)`,
     );
     logInfo(`hakoinu killed by ${killer.name} (${penalty} pts, entity ${entityId})`);
     if (timerHudActive) {
@@ -2301,10 +2235,7 @@ function hasCaptureItemsInContainer(container) {
 /** 納品チェストで吸収・減点しない（操作時計・骨） */
 function isChestPreservedItem(itemStack) {
   if (!itemStack) return false;
-  return (
-    isRobwWandItemType(itemStack.typeId) ||
-    itemStack.typeId === CONFIG.PROTECT_ITEM
-  );
+  return isRobwWandItemType(itemStack.typeId) || itemStack.typeId === CONFIG.PROTECT_ITEM;
 }
 
 function countJunkItemsInContainer(container) {
@@ -2322,10 +2253,7 @@ function countJunkItemsInContainer(container) {
 }
 
 function hasSubmissionChestItemsInContainer(container) {
-  return (
-    hasCaptureItemsInContainer(container) ||
-    countJunkItemsInContainer(container) > 0
-  );
+  return hasCaptureItemsInContainer(container) || countJunkItemsInContainer(container) > 0;
 }
 
 function clearJunkItemsFromContainer(container) {
@@ -2371,29 +2299,28 @@ function announceDelivery(player, returned, junkCount, points, total) {
 
   if (junkCount > 0 && furTotal <= 0) {
     broadcast(
-      `§c${player.name}§fが納品チェストに毛皮以外を入れてしまった！ ${formatPointsDelta(junkPenalty)} §7(合計 ${total}pt)`
+      `§c${player.name}§fが納品チェストに毛皮以外を入れてしまった！ ${formatPointsDelta(junkPenalty)} §7(合計 ${total}pt)`,
     );
     return;
   }
 
   if (returned.wrong > 0 && returned.hakoinu > 0) {
     broadcast(
-      `§6${player.name}§fが納品しました！ §aハコイヌ${returned.hakoinu} §7/ §c別種${returned.wrong} (${formatPointsDelta(wrongPenalty)}) §7-> ${formatPointsDelta(points)} §7(合計 ${total}pt)`
+      `§6${player.name}§fが納品しました！ §aハコイヌ${returned.hakoinu} §7/ §c別種${returned.wrong} (${formatPointsDelta(wrongPenalty)}) §7-> ${formatPointsDelta(points)} §7(合計 ${total}pt)`,
     );
   } else if (returned.wrong > 0) {
     broadcast(
-      `§c${player.name}§fが別種の動物を納品してしまった！ ${formatPointsDelta(points)} §7(合計 ${total}pt)`
+      `§c${player.name}§fが別種の動物を納品してしまった！ ${formatPointsDelta(points)} §7(合計 ${total}pt)`,
     );
   } else if (returned.hakoinu === 1) {
     broadcast(
-      `§6${player.name}§fがハコイヌをボックスワールドへ帰還させました！ ${formatPointsDelta(points)} §7(合計 ${total}pt)`
+      `§6${player.name}§fがハコイヌをボックスワールドへ帰還させました！ ${formatPointsDelta(points)} §7(合計 ${total}pt)`,
     );
   } else {
     broadcast(
-      `§6${player.name}§fが捕獲ハコイヌを${returned.hakoinu}匹納品しました！ ${formatPointsDelta(points)} §7(合計 ${total}pt)`
+      `§6${player.name}§fが捕獲ハコイヌを${returned.hakoinu}匹納品しました！ ${formatPointsDelta(points)} §7(合計 ${total}pt)`,
     );
   }
-
 }
 
 function processSubmissionChest(player) {
@@ -2403,20 +2330,16 @@ function processSubmissionChest(player) {
   const container = getSubmissionChestContainer();
   if (!container) {
     const chest = getActiveSubmissionChestPos();
-    robwPlayerMessage(player,
-      `§c納品チェストがありません。(${chest.x}, ${chest.y}, ${chest.z}) 付近を確認してください。`
+    robwPlayerMessage(
+      player,
+      `§c納品チェストがありません。(${chest.x}, ${chest.y}, ${chest.z}) 付近を確認してください。`,
     );
     return;
   }
 
   const pending = countCaptureItemsInContainer(container);
   const pendingJunk = countJunkItemsInContainer(container);
-  if (
-    pending.hakoinu <= 0 &&
-    pending.wrong <= 0 &&
-    pending.unified <= 0 &&
-    pendingJunk <= 0
-  ) {
+  if (pending.hakoinu <= 0 && pending.wrong <= 0 && pending.unified <= 0 && pendingJunk <= 0) {
     return;
   }
 
@@ -2436,10 +2359,8 @@ function processSubmissionChest(player) {
     returned.wrong * CONFIG.POINTS_WRONG_ANIMAL +
     junkRemoved * CONFIG.POINTS_CHEST_JUNK_ITEM;
   const total = addReturnPoints(player, points);
-  const bonesFromHakoinu =
-    returned.hakoinu * CONFIG.BONES_PER_HAKOINU_DELIVERY;
-  const bonesFromWrong =
-    returned.wrong * (CONFIG.BONES_PER_WRONG_ANIMAL_DELIVERY ?? 0);
+  const bonesFromHakoinu = returned.hakoinu * CONFIG.BONES_PER_HAKOINU_DELIVERY;
+  const bonesFromWrong = returned.wrong * (CONFIG.BONES_PER_WRONG_ANIMAL_DELIVERY ?? 0);
   const bonesEarned = bonesFromHakoinu + bonesFromWrong;
   if (bonesEarned > 0) {
     giveBones(player, bonesEarned);
@@ -2447,34 +2368,34 @@ function processSubmissionChest(player) {
   announceDelivery(player, returned, junkRemoved, points, total);
   const furConsumed = returned.hakoinu + returned.wrong;
   if (furConsumed > 0) {
-    robwPlayerMessage(player,
-      `§7納品した毛皮 ${furConsumed} 枚を消費しました。`
-    );
+    robwPlayerMessage(player, `§7納品した毛皮 ${furConsumed} 枚を消費しました。`);
   }
   if (junkRemoved > 0) {
     robwPlayerMessage(
       player,
-      `§7納品チェストから毛皮以外 x${junkRemoved} を吸収しました。 ${formatPointsDelta(junkRemoved * CONFIG.POINTS_CHEST_JUNK_ITEM)}`
+      `§7納品チェストから毛皮以外 x${junkRemoved} を吸収しました。 ${formatPointsDelta(junkRemoved * CONFIG.POINTS_CHEST_JUNK_ITEM)}`,
     );
   }
   if (returned.wrong > 0) {
     robwPlayerMessage(
       player,
-      `§c別種 ${returned.wrong} 枚 … ${formatPointsDelta(returned.wrong * CONFIG.POINTS_WRONG_ANIMAL)}`
+      `§c別種 ${returned.wrong} 枚 … ${formatPointsDelta(returned.wrong * CONFIG.POINTS_WRONG_ANIMAL)}`,
     );
   }
   if (bonesFromHakoinu > 0) {
-    robwPlayerMessage(player,
-      `§a納品ボーナス: 骨 x${bonesFromHakoinu} §7(ハコイヌ x${CONFIG.BONES_PER_HAKOINU_DELIVERY}/枚)`
+    robwPlayerMessage(
+      player,
+      `§a納品ボーナス: 骨 x${bonesFromHakoinu} §7(ハコイヌ x${CONFIG.BONES_PER_HAKOINU_DELIVERY}/枚)`,
     );
   }
   if (bonesFromWrong > 0) {
-    robwPlayerMessage(player,
-      `§a納品ボーナス: 骨 x${bonesFromWrong} §7(別種 x${CONFIG.BONES_PER_WRONG_ANIMAL_DELIVERY}/枚)`
+    robwPlayerMessage(
+      player,
+      `§a納品ボーナス: 骨 x${bonesFromWrong} §7(別種 x${CONFIG.BONES_PER_WRONG_ANIMAL_DELIVERY}/枚)`,
     );
   }
   logInfo(
-    `${player.name} submitted hakoinu=${returned.hakoinu} wrong=${returned.wrong} junk=${junkRemoved} (${points} pts)`
+    `${player.name} submitted hakoinu=${returned.hakoinu} wrong=${returned.wrong} junk=${junkRemoved} (${points} pts)`,
   );
 }
 
@@ -2555,10 +2476,7 @@ function getTimerObjective() {
   const board = world.scoreboard;
   let objective = board.getObjective(CONFIG.TIMER_SCORE_OBJECTIVE);
   if (!objective) {
-    objective = board.addObjective(
-      CONFIG.TIMER_SCORE_OBJECTIVE,
-      "§e§l残り時間"
-    );
+    objective = board.addObjective(CONFIG.TIMER_SCORE_OBJECTIVE, "§e§l残り時間");
   }
   return objective;
 }
@@ -2736,7 +2654,7 @@ function applyTimerHudActionBar(remainingLineText, limitLineText) {
     if (!player?.isValid) continue;
     try {
       player.onScreenDisplay?.setActionBar(
-        formatHudActionBarForPlayer(player, remainingLineText, limitLineText)
+        formatHudActionBarForPlayer(player, remainingLineText, limitLineText),
       );
     } catch {
       // ignore
@@ -2764,19 +2682,14 @@ function updateTimerSidebar(remainingLineText, limitLineText) {
       objective,
       timerHudRemainingName,
       remainingLineText,
-      6
+      6,
     );
-    timerHudLimitName = updateTimerSidebarLine(
-      objective,
-      timerHudLimitName,
-      limitLineText,
-      5
-    );
+    timerHudLimitName = updateTimerSidebarLine(objective, timerHudLimitName, limitLineText, 5);
     timerHudChestName = updateTimerSidebarLine(
       objective,
       timerHudChestName,
       formatChestHudLine(),
-      4
+      4,
     );
 
     const players = world.getPlayers().filter((p) => p?.isValid);
@@ -2787,10 +2700,7 @@ function updateTimerSidebar(remainingLineText, limitLineText) {
     for (const player of players) {
       const line = formatPlayerPointsHudLine(player, solo);
       const prev = timerHudPlayerPointNames.get(player.id);
-      timerHudPlayerPointNames.set(
-        player.id,
-        updateTimerSidebarLine(objective, prev, line, slot)
-      );
+      timerHudPlayerPointNames.set(player.id, updateTimerSidebarLine(objective, prev, line, slot));
       activeIds.add(player.id);
       slot -= 1;
     }
@@ -2936,8 +2846,7 @@ function resolveRoundDeathPlayer(playerOrId) {
 function applyRoundDeathPenalty(playerOrId, fallbackName) {
   if (gameState !== "running" || !activeRoundCenter) return false;
 
-  const playerId =
-    typeof playerOrId === "string" ? playerOrId : playerOrId?.id;
+  const playerId = typeof playerOrId === "string" ? playerOrId : playerOrId?.id;
   if (!playerId || roundDeathPenaltyAppliedIds.has(playerId)) return false;
 
   const penalty = CONFIG.POINTS_PLAYER_DEATH ?? -10;
@@ -2957,12 +2866,10 @@ function applyRoundDeathPenalty(playerOrId, fallbackName) {
 
   const total = addReturnPoints(player, penalty);
   const displayName = player.name ?? fallbackName ?? "?";
-  broadcast(
-    `§c${displayName}§fが倒れました！ ${formatPointsDelta(penalty)} §7(合計 ${total}pt)`
-  );
+  broadcast(`§c${displayName}§fが倒れました！ ${formatPointsDelta(penalty)} §7(合計 ${total}pt)`);
   robwPlayerMessage(
     player,
-    `§c死亡… ${formatPointsDelta(penalty)} §7開始地点へテレポートして復帰します。`
+    `§c死亡… ${formatPointsDelta(penalty)} §7開始地点へテレポートして復帰します。`,
   );
   if (timerHudActive) {
     refreshRemainingTimeHud();
@@ -2973,7 +2880,10 @@ function applyRoundDeathPenalty(playerOrId, fallbackName) {
 
 function getRoundStartTeleportTarget(player, center, dimension) {
   const players = world.getPlayers().filter((p) => p?.isValid);
-  const index = Math.max(0, players.findIndex((p) => p.id === player.id));
+  const index = Math.max(
+    0,
+    players.findIndex((p) => p.id === player.id),
+  );
   const count = Math.max(1, players.length);
   const baseY = center.y + 1;
   const radius = Math.max(2, Math.ceil(Math.sqrt(count)));
@@ -3012,10 +2922,7 @@ function rememberPlayerSpawnPointsBeforeRound() {
   for (const player of world.getPlayers()) {
     if (!player?.isValid) continue;
     try {
-      const spawn =
-        typeof player.getSpawnPoint === "function"
-          ? player.getSpawnPoint()
-          : undefined;
+      const spawn = typeof player.getSpawnPoint === "function" ? player.getSpawnPoint() : undefined;
       savedPlayerSpawnBeforeRound.set(player.id, spawn);
     } catch {
       savedPlayerSpawnBeforeRound.set(player.id, undefined);
@@ -3073,11 +2980,7 @@ function isPlayerAtRoundStart(player) {
   const dimension = getRoundStartDimension();
   if (!dimension || player.dimension?.id !== dimension.id) return false;
 
-  const { location } = getRoundStartTeleportTarget(
-    player,
-    activeRoundCenter,
-    dimension
-  );
+  const { location } = getRoundStartTeleportTarget(player, activeRoundCenter, dimension);
   const dx = player.location.x - location.x;
   const dy = player.location.y - location.y;
   const dz = player.location.z - location.z;
@@ -3113,8 +3016,7 @@ function teleportPlayerToRoundStart(player, options = {}) {
 function beginRoundDeathRecovery(playerOrId, options = {}) {
   if (gameState !== "running" || !activeRoundCenter) return false;
 
-  const playerId =
-    typeof playerOrId === "string" ? playerOrId : playerOrId?.id;
+  const playerId = typeof playerOrId === "string" ? playerOrId : playerOrId?.id;
   if (!playerId || roundDeathRecoveryInProgress.has(playerId)) {
     return false;
   }
@@ -3196,10 +3098,7 @@ function handlePlayerRoundRespawn(player) {
     }
     const bones = giveRoundRespawnBones(player);
     if (bones > 0) {
-      robwPlayerMessage(
-        player,
-        `§7開始地点に戻りました。§f骨 §7x${bones} §fを補充しました。`
-      );
+      robwPlayerMessage(player, `§7開始地点に戻りました。§f骨 §7x${bones} §fを補充しました。`);
     } else {
       robwPlayerMessage(player, "§7開始地点に戻りました。");
     }
@@ -3212,13 +3111,12 @@ function beginGameRound(host, validation) {
   gameEndWallMs = startedMs + GATE_OPEN_MS;
   nextTimeNotifyWallMs = startedMs + TIME_NOTIFY_INTERVAL_MS;
 
-  broadcast(
-    `§aゲート起動！§f ${CONFIG.GATE_OPEN_MINUTES}分 | 骨で捕獲→足元の納品チェストへ`,
-    { priority: "high" }
-  );
+  broadcast(`§aゲート起動！§f ${CONFIG.GATE_OPEN_MINUTES}分 | 骨で捕獲→足元の納品チェストへ`, {
+    priority: "high",
+  });
   broadcast(
     `§7攻撃 ${CONFIG.POINTS_HAKOINU_HIT}pt/回 倒す ${CONFIG.POINTS_HAKOINU_KILL}pt 別種納品 ${CONFIG.POINTS_WRONG_ANIMAL}pt §7| 開始: ${host.name} (${validation.center.x}, ${validation.center.y}, ${validation.center.z})`,
-    { priority: "high" }
+    { priority: "high" },
   );
 
   if (!prepareRoundStart(validation)) {
@@ -3229,7 +3127,10 @@ function beginGameRound(host, validation) {
     placedChestRestore = null;
     clearRemainingTimeHud();
     restoreRoundRespawnSettings();
-    robwPlayerMessage(host,"§c納品チェストを設置できませんでした。地面の上で start してください。");
+    robwPlayerMessage(
+      host,
+      "§c納品チェストを設置できませんでした。地面の上で start してください。",
+    );
     logWarn("start rolled back: chest placement failed");
     return;
   }
@@ -3252,9 +3153,9 @@ function beginGameRound(host, validation) {
   }, TICKS_PER_SECOND);
   startSpawnReplenishLoop();
 
-  robwPlayerMessage(host,"§a[ROBW] ゲートを起動しました！");
+  robwPlayerMessage(host, "§a[ROBW] ゲートを起動しました！");
   logInfo(
-    `Game started at (${validation.center.x}, ${validation.center.y}, ${validation.center.z}) by ${host.name}`
+    `Game started at (${validation.center.x}, ${validation.center.y}, ${validation.center.z}) by ${host.name}`,
   );
 }
 
@@ -3291,7 +3192,7 @@ function startGame(initiator) {
 
   const validation = validateRoundStartAtPlayer(host);
   if (!validation.ok) {
-    robwPlayerMessage(host,validation.message);
+    robwPlayerMessage(host, validation.message);
     logWarn(`start blocked for ${host.name}: ${validation.reason}`);
     return;
   }
@@ -3378,9 +3279,7 @@ function runRobwSubcommand(sub, player) {
       break;
     default:
       if (player) {
-        robwPlayerMessage(player,
-          `§7使用法: ${CONFIG.CHAT_PREFIX} start | stop | reset | ranking`
-        );
+        robwPlayerMessage(player, `§7使用法: ${CONFIG.CHAT_PREFIX} start | stop | reset | ranking`);
       }
       break;
   }
@@ -3435,9 +3334,7 @@ function resolveWandSubcommand(itemStack) {
     if (wandName.toLowerCase() === lower) return sub;
   }
 
-  const prefixMatch = lower.match(
-    /^robw[:：](start|stop|reset|ranking|menu|メニュー)$/
-  );
+  const prefixMatch = lower.match(/^robw[:：](start|stop|reset|ranking|menu|メニュー)$/);
   if (prefixMatch) {
     const cmd = prefixMatch[1];
     if (cmd === "start" || cmd === "menu" || cmd === "メニュー") return "menu";
@@ -3471,22 +3368,22 @@ function getRobwMenuStatePlain() {
 function onRobwMenuSelected(player, sub) {
   runRobwSubcommand(sub, player);
   if (sub !== "ranking") {
-    robwPlayerMessage(player,`§7[ROBW] ${sub} を実行しました`);
+    robwPlayerMessage(player, `§7[ROBW] ${sub} を実行しました`);
   }
 }
 
 function openRobwControlMenuChat(player) {
   const state = getRobwMenuStatePlain();
-  robwPlayerMessage(player,"§6§l--- Return of BoxWorld ---");
-  robwPlayerMessage(player,`§7状態: ${state}`);
-  robwPlayerMessage(player,"§e操作 (チート ON で入力):");
-  robwPlayerMessage(player,"§f/scriptevent robw:menu run §7- この一覧");
-  robwPlayerMessage(player,"§f/scriptevent robw:start run §7- ゲート起動");
-  robwPlayerMessage(player,"§f/scriptevent robw:stop run §7- ゲート閉鎖");
-  robwPlayerMessage(player,"§f/scriptevent robw:reset run §7- リセット");
-  robwPlayerMessage(player,"§f/scriptevent robw:ranking run §7- ランキング");
-  robwPlayerMessage(player,"§7(パック適用済みなら) §f/function robw/start §7なども可");
-  robwPlayerMessage(player,`§7または §f${CONFIG.CHAT_PREFIX} start §7(Beta API 要)`);
+  robwPlayerMessage(player, "§6§l--- Return of BoxWorld ---");
+  robwPlayerMessage(player, `§7状態: ${state}`);
+  robwPlayerMessage(player, "§e操作 (チート ON で入力):");
+  robwPlayerMessage(player, "§f/scriptevent robw:menu run §7- この一覧");
+  robwPlayerMessage(player, "§f/scriptevent robw:start run §7- ゲート起動");
+  robwPlayerMessage(player, "§f/scriptevent robw:stop run §7- ゲート閉鎖");
+  robwPlayerMessage(player, "§f/scriptevent robw:reset run §7- リセット");
+  robwPlayerMessage(player, "§f/scriptevent robw:ranking run §7- ランキング");
+  robwPlayerMessage(player, "§7(パック適用済みなら) §f/function robw/start §7なども可");
+  robwPlayerMessage(player, `§7または §f${CONFIG.CHAT_PREFIX} start §7(Beta API 要)`);
 }
 
 function openRobwControlMenu(player) {
@@ -3529,9 +3426,9 @@ function tryOpenRobwMenuFromWand(player, itemStack) {
     return true;
   }
 
-  robwPlayerMessage(player,"§7[ROBW] 操作時計を使用中...");
+  robwPlayerMessage(player, "§7[ROBW] 操作時計を使用中...");
   runRobwSubcommand(sub, player);
-  robwPlayerMessage(player,`§7[ROBW] ${sub} を実行しました`);
+  robwPlayerMessage(player, `§7[ROBW] ${sub} を実行しました`);
   return true;
 }
 
@@ -3662,16 +3559,17 @@ function giveStarterWand(player, options) {
     stack.nameTag = CONFIG.WAND_MENU_NAME;
     addItemStackToPlayer(player, stack);
 
-    robwPlayerMessage(player,
-      "§a[ROBW] 操作時計を渡しました。§fブロック右クリック§aでメニュー(start/stop/reset)"
+    robwPlayerMessage(
+      player,
+      "§a[ROBW] 操作時計を渡しました。§fブロック右クリック§aでメニュー(start/stop/reset)",
     );
     logInfo(`gave ${CONFIG.WAND_ITEM} (${CONFIG.WAND_MENU_NAME}) to ${player.name}`);
 
     tryGiveCustomControlItem(player);
   } catch (error) {
     logError(`giveStarterWand failed for ${player.name}: ${error}`);
-    robwPlayerMessage(player,"§c[ROBW] 操作時計の配布に失敗しました");
-    robwPlayerMessage(player,"§7/scriptevent robw:give_wand run または /give @s clock 1");
+    robwPlayerMessage(player, "§c[ROBW] 操作時計の配布に失敗しました");
+    robwPlayerMessage(player, "§7/scriptevent robw:give_wand run または /give @s clock 1");
   }
 }
 
@@ -3690,9 +3588,7 @@ function scheduleStarterWandRetries(player) {
 function handleScriptEvent(eventId, sourceEntity) {
   const id = eventId.toLowerCase();
   const player =
-    sourceEntity && typeof sourceEntity.sendMessage === "function"
-      ? sourceEntity
-      : undefined;
+    sourceEntity && typeof sourceEntity.sendMessage === "function" ? sourceEntity : undefined;
 
   if (
     id.includes("give_wand") ||
@@ -3732,8 +3628,9 @@ function onItemUsed(player, itemStack) {
 
   const held = getHeldItemStack(player);
   if (held && isRobwWandItemType(held.typeId)) {
-    robwPlayerMessage(player,
-      "§7[ROBW] 操作アイテムを右クリック(空中またはブロック)してください。"
+    robwPlayerMessage(
+      player,
+      "§7[ROBW] 操作アイテムを右クリック(空中またはブロック)してください。",
     );
   }
 }
@@ -3888,7 +3785,7 @@ function registerRobwCustomCommands(initEvent) {
   const registry = initEvent?.customCommandRegistry;
   if (!registry?.registerCommand) {
     logInfo(
-      "customCommandRegistry unavailable — use /scriptevent robw:start (game 1.21.80+ for /robw:start)"
+      "customCommandRegistry unavailable — use /scriptevent robw:start (game 1.21.80+ for /robw:start)",
     );
     return;
   }
@@ -3924,7 +3821,7 @@ function registerRobwCustomCommands(initEvent) {
           runRobwSubcommand(action, entity);
         });
         return { status: 0 };
-      }
+      },
     );
   }
 
@@ -4062,8 +3959,7 @@ function registerGameEvents() {
   registerPlayerDeathHandlers();
 
   const scriptEventSignal =
-    system.afterEvents?.scriptEventReceive ??
-    world.afterEvents?.scriptEventReceive;
+    system.afterEvents?.scriptEventReceive ?? world.afterEvents?.scriptEventReceive;
   if (scriptEventSignal) {
     scriptEventSignal.subscribe((event) => {
       logInfo(`scriptevent received: ${event.id}`);
@@ -4156,7 +4052,7 @@ function onAddonReady() {
       addonReadyDone = true;
       logInfo("Return of BoxWorld addon loaded (state: waiting)");
       logInfo(
-        `box gate: (${CONFIG.BOX_GATE.x}, ${CONFIG.BOX_GATE.y}, ${CONFIG.BOX_GATE.z}) r=${CONFIG.BOX_GATE.radius}`
+        `box gate: (${CONFIG.BOX_GATE.x}, ${CONFIG.BOX_GATE.y}, ${CONFIG.BOX_GATE.z}) r=${CONFIG.BOX_GATE.radius}`,
       );
       for (const line of getRobwHelpLines()) {
         try {
@@ -4233,10 +4129,7 @@ world.afterEvents.playerSpawn.subscribe((event) => {
         }
       } else {
         const host = getSessionHost();
-        robwPlayerMessage(
-          player,
-          `§7あなたは§f参加者§7です。ホスト: §6${host?.name ?? "?"}`
-        );
+        robwPlayerMessage(player, `§7あなたは§f参加者§7です。ホスト: §6${host?.name ?? "?"}`);
       }
     }
 

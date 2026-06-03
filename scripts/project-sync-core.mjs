@@ -254,9 +254,7 @@ export function parseRobwGameSpec(mainJsSource) {
     throw new Error("const CONFIG = { ... } が main.js に見つかりません");
   }
   const block = configMatch[1];
-  const milestoneMatch = mainJsSource.match(
-    /const MILESTONE_SECONDS = \[([^\]]+)\]/,
-  );
+  const milestoneMatch = mainJsSource.match(/const MILESTONE_SECONDS = \[([^\]]+)\]/);
   const milestones = milestoneMatch
     ? milestoneMatch[1]
         .split(",")
@@ -266,33 +264,21 @@ export function parseRobwGameSpec(mainJsSource) {
 
   return {
     gateOpenMinutes: parseConfigNumber(block, "GATE_OPEN_MINUTES"),
-    timeNotifyIntervalSeconds: parseConfigNumber(
-      block,
-      "TIME_NOTIFY_INTERVAL_SECONDS",
-    ),
+    timeNotifyIntervalSeconds: parseConfigNumber(block, "TIME_NOTIFY_INTERVAL_SECONDS"),
     protectionRadius: parseConfigNumber(block, "PROTECTION_RADIUS"),
     boxGate: parseBoxGate(block),
     submissionChest: parseCoordBlock(block, "SUBMISSION_CHEST"),
     gateSummonOffsetY: parseConfigNumber(block, "GATE_SUMMON_OFFSET_Y"),
     startGiveBones: parseConfigNumber(block, "START_GIVE_BONES"),
     bonesPerHakoinuDelivery: parseConfigNumber(block, "BONES_PER_HAKOINU_DELIVERY"),
-    bonesPerWrongAnimalDelivery: parseConfigNumber(
-      block,
-      "BONES_PER_WRONG_ANIMAL_DELIVERY",
-    ),
+    bonesPerWrongAnimalDelivery: parseConfigNumber(block, "BONES_PER_WRONG_ANIMAL_DELIVERY"),
     bonesPerCapture: parseConfigNumber(block, "BONES_PER_CAPTURE"),
     startSpawnHakoinu: parseConfigNumber(block, "START_SPAWN_HAKOINU"),
-    startSpawnPenaltyAnimals: parseConfigNumber(
-      block,
-      "START_SPAWN_PENALTY_ANIMALS",
-    ),
+    startSpawnPenaltyAnimals: parseConfigNumber(block, "START_SPAWN_PENALTY_ANIMALS"),
     spawnMinDistance: parseConfigNumber(block, "SPAWN_MIN_DISTANCE"),
     spawnMaxDistance: parseConfigNumber(block, "SPAWN_MAX_DISTANCE"),
     chestCleanupRadius: parseConfigNumber(block, "CHEST_CLEANUP_RADIUS"),
-    chestCleanupVerticalRange: parseConfigNumber(
-      block,
-      "CHEST_CLEANUP_VERTICAL_RANGE",
-    ),
+    chestCleanupVerticalRange: parseConfigNumber(block, "CHEST_CLEANUP_VERTICAL_RANGE"),
     protectItem: parseConfigString(block, "PROTECT_ITEM"),
     returnBoxItem: parseConfigString(block, "RETURN_BOX_ITEM"),
     returnBoxDisplayName: parseConfigString(block, "RETURN_BOX_DISPLAY_NAME"),
@@ -347,9 +333,7 @@ export function generateGameRulesMarkdown(spec, mcFunctions = []) {
     "",
     "| ゲーム内 | 実装 |",
     "|----------|------|",
-    "| ハコイヌ | " +
-      spec.hakoinuEntityTypes.map(entityLabel).join("、") +
-      " |",
+    "| ハコイヌ | " + spec.hakoinuEntityTypes.map(entityLabel).join("、") + " |",
     `| 捕獲アイテム | ${spec.returnBoxItem}（表示名: ${spec.returnBoxDisplayName ?? spec.returnBoxName}・正誤は見た目では区別不可） |`,
     "| 納品チェスト | start したプレイヤーの足元に 1 つ設置 |",
     "| ラウンド中心 | start したプレイヤーの立ち位置（ハコイヌ出現の中心） |",
@@ -412,9 +396,7 @@ export function generateGameRulesMarkdown(spec, mcFunctions = []) {
       (w) =>
         `| 時計（${spec.wandItem}） | 名前 \`${w.label}\` を空中で右クリック | → \`${w.action}\` |`,
     ),
-    ...mcFunctions.map(
-      (name) => `| 関数 | \`/function robw/${name}\` | チート ON |`,
-    ),
+    ...mcFunctions.map((name) => `| 関数 | \`/function robw/${name}\` | チート ON |`),
     `| scriptevent | \`/scriptevent robw:start\` 等 | チート ON |`,
     "",
     "### ゲーム状態",

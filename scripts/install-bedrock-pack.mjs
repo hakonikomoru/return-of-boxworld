@@ -37,10 +37,30 @@ if (existsSync(usersRoot)) {
 }
 
 const destFolders = [
-  { kind: "behavior", folder: "behavior_packs", name: "robw_behavior", srcResolved: behaviorSrcResolved },
-  { kind: "behavior", folder: "development_behavior_packs", name: "robw_behavior", srcResolved: behaviorSrcResolved },
-  { kind: "resource", folder: "resource_packs", name: "robw_resources", srcResolved: resourceSrcResolved },
-  { kind: "resource", folder: "development_resource_packs", name: "robw_resources", srcResolved: resourceSrcResolved },
+  {
+    kind: "behavior",
+    folder: "behavior_packs",
+    name: "robw_behavior",
+    srcResolved: behaviorSrcResolved,
+  },
+  {
+    kind: "behavior",
+    folder: "development_behavior_packs",
+    name: "robw_behavior",
+    srcResolved: behaviorSrcResolved,
+  },
+  {
+    kind: "resource",
+    folder: "resource_packs",
+    name: "robw_resources",
+    srcResolved: resourceSrcResolved,
+  },
+  {
+    kind: "resource",
+    folder: "development_resource_packs",
+    name: "robw_resources",
+    srcResolved: resourceSrcResolved,
+  },
 ];
 let linked = 0;
 

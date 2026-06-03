@@ -29,11 +29,7 @@ describe("behavior pack scripts", () => {
   it("main.js has no duplicate function declarations", () => {
     const src = readText(mainJsPath);
     const dupes = findDuplicateFunctionNames(src);
-    assert.deepEqual(
-      dupes,
-      [],
-      `duplicate functions: ${dupes.join(", ")}`,
-    );
+    assert.deepEqual(dupes, [], `duplicate functions: ${dupes.join(", ")}`);
   });
 
   it("menu-ui.js has no duplicate function declarations", () => {
