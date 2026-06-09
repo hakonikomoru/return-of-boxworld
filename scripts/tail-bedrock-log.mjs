@@ -104,7 +104,9 @@ function findLatestLogFile() {
 
 function shouldPrint(line) {
   if (!robwOnly) return true;
-  return /\[ROBW\]|robw:|scriptevent|Script|\[INFO\]|\[WARN\]|\[ERROR\]|\[ゲーム内\]/i.test(line);
+  return /\[ROBW\]|robw:|scriptevent|Script|\[INFO\]|\[WARN\]|\[ERROR\]|\[ゲーム内\]|main\.js loaded|menu-ui\.js loaded|bootstrap/i.test(
+    line
+  );
 }
 
 function ensureMirror() {

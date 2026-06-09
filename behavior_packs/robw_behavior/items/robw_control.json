@@ -10,10 +10,13 @@
     "components": {
       "minecraft:icon": {
         "textures": {
-          "default": "clock"
+          "default": "robw_control"
         }
       },
       "minecraft:max_stack_size": 1,
+      "minecraft:item_lock": {
+        "mode": "lock_in_slot"
+      },
       "minecraft:use_modifiers": {
         "use_duration": 0.1,
         "movement_modifier": 1.0

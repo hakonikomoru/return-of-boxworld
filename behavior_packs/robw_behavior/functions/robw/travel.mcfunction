@@ -1,0 +1,1 @@
+scriptevent robw:locate run

@@ -16,4 +16,4 @@
 - Minecraft **Bedrock Edition** の Script API アドオン（behavior pack）
 - 企画名: **リターン・オブ・ボックスワールド（Return of BoxWorld）**
 - MVP: 骨でハコイヌ保護 → 茶色の毛皮（帰還ボックス）→ ボックスゲートで帰還ポイント化
-- ゲーム操作: `!robw start | stop | reset | ranking`（要 Beta APIs）、時計 `ROBW:menu`（空中右クリック→メニュー）、`/function robw/start`（詳細は `docs/bedrock-dev-notes.md`）
+- ゲーム操作: `!robw start | stop | reset | ranking`（要 Beta APIs）、操作アイテム `robw:control`（`ROBW:menu`・空中右クリック→メニュー）、`/function robw/start`（詳細は `docs/bedrock-dev-notes.md`）

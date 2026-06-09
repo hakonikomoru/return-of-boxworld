@@ -6,8 +6,12 @@
 import { world, system, ItemStack, WeatherType, DisplaySlotId } from "@minecraft/server";
 
 import "./menu-ui.js";
+import * as box100 from "./box100-mode.js";
 
-console.warn("[ROBW] main.js loaded");
+/** manifest header.version と揃える（起動ログ用） */
+const ROBW_PACK_VERSION = "0.1.3";
+
+console.warn(`[ROBW] main.js loaded (pack ${ROBW_PACK_VERSION})`);
 
 // ---------------------------------------------------------------------------
 // ゲーム設定（CONFIG）
@@ -23,8 +27,41 @@ const CONFIG = {
   TIME_NOTIFY_INTERVAL_SECONDS: 60,
   /** 10 秒あたりの全員チャット上限（左上オーバーレイの詰まり抑制） */
   UI_BROADCAST_MAX_PER_10_SECONDS: 4,
-  /** 骨で捕獲できる動物までの距離（ブロック） */
-  PROTECTION_RADIUS: 4,
+  /**
+   * 全員向けメッセージの見た目。
+   * - `actionbar` … 画面上部に1行だけ（次の通知で上書き。左上に積まない）
+   * - `chat` … 従来どおりチャット（左上に積む）
+   */
+  UI_BROADCAST_DISPLAY: "actionbar",
+  /** 個人向け（robwPlayerMessage）。未指定時は UI_BROADCAST_DISPLAY と同じ */
+  UI_PLAYER_MESSAGE_DISPLAY: "actionbar",
+  /** `chat` 時、同一文言を再送しない秒数（0=無効） */
+  UI_BROADCAST_DEDUPE_SECONDS: 30,
+  /** `actionbar` でランキング等を順送りするときの間隔（tick）。20≒1秒 */
+  UI_BROADCAST_SEQUENCE_STEP_TICKS: 60,
+  /** locate で探すステージのスキャン最大半径（ブロック）。API で座標が取れないとき */
+  STAGE_LOCATE_MAX_SCAN_BLOCKS: 8192,
+  /** 構造物スキャンの粗い間隔（ブロック） */
+  STAGE_LOCATE_SCAN_STEP: 128,
+  /** ワールド入場後、ホスト向けに構造物座標を裏でプリフェッチする */
+  STAGE_LOCATE_PREFETCH_ON_JOIN: false,
+  /**
+   * 「構造物を探す」メニューに出すステージ id（locate ショートカットのみ。座標は手動登録）
+   */
+  STRUCTURE_LOCATE_SHORTCUT_STAGE_IDS: [
+    "village",
+    "pillager_outpost",
+    "desert_pyramid",
+    "jungle_pyramid",
+    "igloo",
+    "swamp_hut",
+  ],
+  /** プリフェッチ時の getGeneratedStructures スキャン半径（ブロック） */
+  STAGE_LOCATE_PREFETCH_SCAN_BLOCKS: 8192,
+  /** locate 後にホストを送って探す最大試行数 */
+  STAGE_LOCATE_MAX_PROBES: 48,
+  /** 各試行で chunk 読み込み後に待つ tick 数（エンティティスポーン待ち） */
+  STAGE_LOCATE_PROBE_WAIT_TICKS: 20,
   /** ラウンド中心のフォールバック（通常は start した人の位置が使われる） */
   BOX_GATE: {
     x: 0,
@@ -32,6 +69,88 @@ const CONFIG = {
     z: 0,
     radius: 3,
   },
+  /**
+   * locate メニュー（/locate structure）で選べる構造物の ID。
+   * locate: null は移動メニューに出さない。dimension は locate 先（省略時 overworld）。
+   * locate ID は Bedrock 公式どおり minecraft: 付き（例: minecraft:pillager_outpost）。
+   */
+  ROUND_STAGES: [
+    { id: "here", label: "今の位置（ホスト足元）", locate: null },
+    { id: "village", label: "村", locate: "minecraft:village", dimension: "overworld" },
+    {
+      id: "pillager_outpost",
+      label: "ピリジャー前哨基地",
+      locate: "minecraft:pillager_outpost",
+      dimension: "overworld",
+    },
+    {
+      id: "desert_pyramid",
+      label: "砂漠の神殿",
+      locate: "minecraft:desert_pyramid",
+      dimension: "overworld",
+    },
+    {
+      id: "jungle_pyramid",
+      label: "ジャングルの寺院",
+      locate: "minecraft:jungle_pyramid",
+      dimension: "overworld",
+    },
+    {
+      id: "swamp_hut",
+      label: "沼地の小屋",
+      locate: "minecraft:swamp_hut",
+      dimension: "overworld",
+    },
+    { id: "igloo", label: "イグルー", locate: "minecraft:igloo", dimension: "overworld" },
+    {
+      id: "ocean_monument",
+      label: "海底神殿",
+      locate: "minecraft:monument",
+      dimension: "overworld",
+    },
+    {
+      id: "woodland_mansion",
+      label: "森の洋館",
+      locate: "minecraft:mansion",
+      dimension: "overworld",
+    },
+    {
+      id: "stronghold",
+      label: "要塞",
+      locate: "minecraft:stronghold",
+      dimension: "overworld",
+    },
+    {
+      id: "ruined_portal",
+      label: "崩壊ポータル",
+      locate: "minecraft:ruined_portal",
+      dimension: "overworld",
+    },
+    {
+      id: "shipwreck",
+      label: "難破船",
+      locate: "minecraft:shipwreck",
+      dimension: "overworld",
+    },
+    {
+      id: "buried_treasure",
+      label: "埋もれた宝",
+      locate: "minecraft:buried_treasure",
+      dimension: "overworld",
+    },
+    {
+      id: "trail_ruins",
+      label: "道標の遺跡",
+      locate: "minecraft:trail_ruins",
+      dimension: "overworld",
+    },
+    {
+      id: "ancient_city",
+      label: "古代都市",
+      locate: "minecraft:ancient_city",
+      dimension: "overworld",
+    },
+  ],
   /** 納品チェストのフォールバック座標（通常は足元に自動設置） */
   SUBMISSION_CHEST: {
     x: 0,
@@ -47,7 +166,13 @@ const CONFIG = {
   /** 撤去する落とし物エンティティの typeId */
   DROPPED_ITEM_ENTITY_TYPES: ["minecraft:item"],
   /** 撤去対象とする収納ブロック（通常は変更不要） */
-  SUBMISSION_CHEST_BLOCK_TYPES: ["minecraft:chest", "minecraft:trapped_chest", "minecraft:barrel"],
+  SUBMISSION_CHEST_BLOCK_TYPES: [
+    "minecraft:chest",
+    "minecraft:trapped_chest",
+    "minecraft:barrel",
+  ],
+  /** ラウンド中、設置した納品チェストの破壊を防ぐ（通常モード） */
+  PROTECT_SUBMISSION_CHEST: true,
   /** 互換用（現在ほぼ未使用） */
   GATE_SUMMON_OFFSET_Y: 0,
   /** ラウンド開始時に全員へ渡す骨の数（所持分はいったん消してから配布） */
@@ -129,15 +254,125 @@ const CONFIG = {
   POINTS_HAKOINU_HIT: -1,
   /** ラウンド中にプレイヤーが死亡したときの減点（マイナスで書く） */
   POINTS_PLAYER_DEATH: -10,
+  /**
+   * ハコイヌ100匹チャレンジ (box100) — 個室羊毛ボックス・タイムアタック
+   * 開発中は WOLF_COUNT を 10 などに下げて負荷テストしてください。
+   */
+  BOX100: {
+    MODE_LABEL: "ハコイヌ100匹チャレンジ",
+    SCORE_OBJECTIVE: "box100_count",
+    ROOM_SIZE: 30,
+    ROOM_HEIGHT: 10,
+    ROOM_GAP: 10,
+    /** 部屋と部屋の間隔（ブロック）。未指定時は ROOM_SIZE + ROOM_GAP */
+    ROOM_GRID_SPACING: 40,
+    /** 横方向の部屋数。4人まで 2×2（■■ / ■■）。5〜6人は自動で 3 列 */
+    ROOM_GRID_COLUMNS: 2,
+    /** @deprecated ROOM_GRID_SPACING を使用 */
+    ROOM_PITCH: 40,
+    /** true のとき地上ではなく天空に部屋を生成（既存建造物を壊さない） */
+    SKY_ARENA_ENABLED: true,
+    /** 羊毛箱の床ブロックの Y（水平位置はホストの X/Z 基準） */
+    SKY_ARENA_BASE_Y: 200,
+    WOLF_COUNT: 100,
+    BONE_COUNT: 120,
+    TIME_LIMIT_SECONDS: 180,
+    MAX_PLAYERS: 6,
+    SHULKER_OFFSET: { x: 15, y: 1, z: 15 },
+    SPAWN_MARGIN: 3,
+    PROGRESS_BROADCAST_EVERY: 10,
+    /** ラウンド中のみ暗視（箱内の視認性向上） */
+    NIGHT_VISION_ENABLED: true,
+    /** ラウンド中、生成した箱（ガラス外殻・シュルカー）の破壊を防ぐ */
+    PROTECT_ROOM_STRUCTURE: true,
+    /** 開始のたびにプレイヤーへ割り当てる箱の色をランダムにする */
+    RANDOMIZE_ROOM_COLORS: true,
+    COLORS: [
+      {
+        id: "red",
+        label: "赤",
+        glass: "minecraft:red_stained_glass",
+        shulker: "minecraft:red_shulker_box",
+      },
+      {
+        id: "blue",
+        label: "青",
+        glass: "minecraft:blue_stained_glass",
+        shulker: "minecraft:blue_shulker_box",
+      },
+      {
+        id: "green",
+        label: "緑",
+        glass: "minecraft:green_stained_glass",
+        shulker: "minecraft:green_shulker_box",
+      },
+      {
+        id: "yellow",
+        label: "黄",
+        glass: "minecraft:yellow_stained_glass",
+        shulker: "minecraft:yellow_shulker_box",
+      },
+      {
+        id: "purple",
+        label: "紫",
+        glass: "minecraft:purple_stained_glass",
+        shulker: "minecraft:purple_shulker_box",
+      },
+      {
+        id: "orange",
+        label: "オレンジ",
+        glass: "minecraft:orange_stained_glass",
+        shulker: "minecraft:orange_shulker_box",
+      },
+      {
+        id: "cyan",
+        label: "水色",
+        glass: "minecraft:cyan_stained_glass",
+        shulker: "minecraft:cyan_shulker_box",
+      },
+      {
+        id: "lime",
+        label: "黄緑",
+        glass: "minecraft:lime_stained_glass",
+        shulker: "minecraft:lime_shulker_box",
+      },
+      {
+        id: "pink",
+        label: "桃",
+        glass: "minecraft:pink_stained_glass",
+        shulker: "minecraft:pink_shulker_box",
+      },
+      {
+        id: "light_blue",
+        label: "空色",
+        glass: "minecraft:light_blue_stained_glass",
+        shulker: "minecraft:light_blue_shulker_box",
+      },
+      {
+        id: "magenta",
+        label: "赤紫",
+        glass: "minecraft:magenta_stained_glass",
+        shulker: "minecraft:magenta_shulker_box",
+      },
+      {
+        id: "white",
+        label: "白",
+        glass: "minecraft:white_stained_glass",
+        shulker: "minecraft:white_shulker_box",
+      },
+    ],
+  },
   /** スコアボードの objective ID */
   SCORE_OBJECTIVE: "return_point",
   /** チャットコマンドの接頭辞（例: !robw start） */
   CHAT_PREFIX: "!robw",
-  /** 操作メニュー用（必ず配布するバニラ時計 + 名前タグ） */
+  /** 旧配布（バニラ時計）。入場時に除去。互換の右クリック判定のみ残す */
   WAND_ITEM: "minecraft:clock",
-  /** カスタム操作アイテム（登録できれば追加配布） */
+  /** 操作メニュー用カスタムアイテム（ホストに1個だけ配布） */
   WAND_ITEM_CUSTOM: "robw:control",
-  /** 配布する時計の名前（右クリックで操作メニュー） */
+  /** 操作アイテムを置くホットバー左端スロット（0〜8） */
+  WAND_CONTROL_HOTBAR_SLOT: 0,
+  /** 操作アイテムの名前タグ（右クリックで操作メニュー） */
   WAND_MENU_NAME: "ROBW:menu",
   /** 旧名（normalize で ROBW:menu に直す） */
   WAND_LEGACY_MENU_NAMES: ["ROBW:start"],
@@ -187,6 +422,8 @@ const LOCKED_DIMENSION_IDS = ["overworld", "nether", "the_end"];
 const UI_BROADCAST_WINDOW_MS = 10_000;
 let uiBroadcastWindowStartMs = 0;
 let uiBroadcastCountInWindow = 0;
+let lastUiBroadcastDedupeKey = "";
+let lastUiBroadcastDedupeAtMs = 0;
 
 // ---------------------------------------------------------------------------
 // ゲーム状態
@@ -230,8 +467,11 @@ const roundDeathRecoveryInProgress = new Set();
 const roundDeathPenaltyAppliedIds = new Set();
 /** playerDie 時点で無効だったプレイヤーへの減点を復活後に適用 */
 const pendingRoundDeathPenaltyIds = new Set();
-/** ラウンド開始前の個人スポーン（終了時に戻す） */
-const savedPlayerSpawnBeforeRound = new Map();
+/**
+ * ラウンド開始前の位置・スポーン（終了時に戻す）
+ * @type {Map<string, { location: { x: number, y: number, z: number }, dimensionId: string, spawn: import("@minecraft/server").SpawnPoint | undefined }>}
+ */
+const savedPlayerPreRoundState = new Map();
 /** @type {boolean | null} */
 let savedDoImmediateRespawn = null;
 /** @type {number | undefined} */
@@ -280,14 +520,69 @@ function robwPlayerMessage(player, message) {
   const text = String(message ?? "");
   const who = player?.name ?? "?";
   logInfo(`[ゲーム内] ${who}: ${stripMcFormatting(text)}`);
-  if (player && typeof player.sendMessage === "function") {
-    player.sendMessage(message);
+  if (player) {
+    sendUiMessageToPlayer(player, message, getUiPlayerMessageDisplayMode());
   }
 }
 
 function resetUiBroadcastBudget() {
   uiBroadcastWindowStartMs = 0;
   uiBroadcastCountInWindow = 0;
+  lastUiBroadcastDedupeKey = "";
+  lastUiBroadcastDedupeAtMs = 0;
+}
+
+function normalizeUiDisplayMode(mode, fallback = "actionbar") {
+  const value = String(mode ?? fallback).toLowerCase();
+  return value === "chat" ? "chat" : "actionbar";
+}
+
+function getUiBroadcastDisplayMode() {
+  return normalizeUiDisplayMode(CONFIG.UI_BROADCAST_DISPLAY, "actionbar");
+}
+
+function getUiPlayerMessageDisplayMode() {
+  return normalizeUiDisplayMode(
+    CONFIG.UI_PLAYER_MESSAGE_DISPLAY ?? CONFIG.UI_BROADCAST_DISPLAY,
+    "actionbar"
+  );
+}
+
+/**
+ * @param {import("@minecraft/server").Player} player
+ * @param {string} message
+ * @param {"chat" | "actionbar"} mode
+ */
+function sendUiMessageToPlayer(player, message, mode) {
+  if (!player?.isValid) return;
+  if (mode === "actionbar") {
+    try {
+      const display = player.onScreenDisplay;
+      if (display && typeof display.setActionBar === "function") {
+        display.setActionBar(message);
+        return;
+      }
+    } catch {
+      // fall through to chat
+    }
+  }
+  if (typeof player.sendMessage === "function") {
+    player.sendMessage(message);
+  }
+}
+
+function shouldDedupeUiBroadcast(text, options = {}) {
+  if (options.skipDedupe || getUiBroadcastDisplayMode() !== "chat") return false;
+  const sec = Math.max(0, CONFIG.UI_BROADCAST_DEDUPE_SECONDS ?? 0);
+  if (sec <= 0) return false;
+  const key = stripMcFormatting(text);
+  const now = Date.now();
+  if (key === lastUiBroadcastDedupeKey && now - lastUiBroadcastDedupeAtMs < sec * 1000) {
+    return true;
+  }
+  lastUiBroadcastDedupeKey = key;
+  lastUiBroadcastDedupeAtMs = now;
+  return false;
 }
 
 /** @param {"high" | "normal"} [priority] high はレート制限を bypass */
@@ -304,7 +599,7 @@ function canSendUiBroadcast(priority = "normal") {
   return true;
 }
 
-/** 全員向けチャット（コンテンツログにも出す） */
+/** 全員向け通知（コンテンツログにも出す） */
 function robwBroadcast(message, options = {}) {
   const text = String(message ?? "");
   const priority = options.priority === "high" ? "high" : "normal";
@@ -312,8 +607,52 @@ function robwBroadcast(message, options = {}) {
     logInfo(`[ゲーム内] 全員(省略): ${stripMcFormatting(text)}`);
     return;
   }
-  logInfo(`[ゲーム内] 全員: ${stripMcFormatting(text)}`);
+  if (shouldDedupeUiBroadcast(text, options)) {
+    logInfo(`[ゲーム内] 全員(重複省略): ${stripMcFormatting(text)}`);
+    return;
+  }
+
+  const mode = options.forceChat ? "chat" : getUiBroadcastDisplayMode();
+  logInfo(`[ゲーム内] 全員(${mode}): ${stripMcFormatting(text)}`);
+
+  if (mode === "actionbar") {
+    for (const player of world.getPlayers()) {
+      sendUiMessageToPlayer(player, message, "actionbar");
+    }
+    return;
+  }
   world.sendMessage(message);
+}
+
+/**
+ * 複数行を順に表示。actionbar 時は1行ずつ上書き（左上に積まない）。
+ * @param {string[]} messages
+ */
+function robwBroadcastSequence(messages, options = {}) {
+  const list = messages.filter((m) => m != null && String(m).length > 0);
+  if (list.length === 0) return;
+
+  const mode = options.forceChat ? "chat" : getUiBroadcastDisplayMode();
+  if (mode === "chat") {
+    for (const message of list) {
+      robwBroadcast(message, { ...options, priority: "high", skipDedupe: true });
+    }
+    return;
+  }
+
+  const stepTicks = Math.max(
+    20,
+    CONFIG.UI_BROADCAST_SEQUENCE_STEP_TICKS ?? 60
+  );
+  list.forEach((message, index) => {
+    system.runTimeout(() => {
+      robwBroadcast(message, {
+        ...options,
+        priority: "high",
+        skipDedupe: true,
+      });
+    }, index * stepTicks);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -506,7 +845,13 @@ function runStartCountdown(host, validation, onComplete) {
   const center = validation.center;
 
   gameState = "countdown";
-  broadcast(`§6${host.name}§fがゲートを起動します...`, { priority: "high" });
+  if (box100.isBox100Mode()) {
+    broadcast(`§6${host.name}§fがハコイヌ100匹チャレンジを開始します...`, {
+      priority: "high",
+    });
+  } else {
+    broadcast(`§6${host.name}§fがゲートを起動します...`, { priority: "high" });
+  }
 
   for (let i = 0; i < START_COUNTDOWN_SEQUENCE.length; i++) {
     const step = START_COUNTDOWN_SEQUENCE[i];
@@ -666,26 +1011,93 @@ function runGameEndCountdown(onComplete) {
   }, totalTicks);
 }
 
-function finalizeGameAfterCeremony() {
+/**
+ * ラウンド終了後の完全リセット（stop カウントダウン後・reset コマンド共通）
+ * @param {{ announce?: boolean, announceMessage?: string }} [options]
+ */
+function performFullGameReset(options = {}) {
+  const { announce = true, announceMessage } = options;
+
+  cancelStartCountdown();
+  cancelEndCountdown();
+  clearPendingRoundDeathRespawns();
+  restoreRoundRespawnSettings();
+  stopGameLoops();
+  clearRemainingTimeHud();
+  gameState = "waiting";
+  resetTimerState();
+  resetAllScores();
+  clearAllReturnBoxLedgers();
+  lastSubmissionPlayer = null;
+  lastSubmissionTick = 0;
+
+  const center = activeRoundCenter;
+  const dimension = getActiveRoundDimension();
+  const wasBox100 = box100.isBox100Mode();
+
+  if (wasBox100) {
+    box100.cleanupBox100(dimension);
+  } else {
+    clearSpawnedHakoinu(center, dimension);
+  }
+
+  activeRoundCenter = null;
+  activeRoundDimension = null;
+
+  const players = world.getPlayers();
+  if (!wasBox100 && players.length > 0) {
+    removePlacedSubmissionChest(players[0].dimension);
+  }
+
+  resetAllPlayersToLobbyInventory();
+
+  if (announce) {
+    broadcast(
+      announceMessage ??
+        `§eゲートを閉鎖し、すべてリセットしました。${CONFIG.CHAT_PREFIX} start で再起動できます。`,
+      { priority: "high" }
+    );
+  }
+  logInfo("full game reset complete");
+}
+
+/**
+ * @param {{ manualStop?: boolean }} [options]
+ */
+function finalizeGameAfterCeremony(options = {}) {
+  if (options.manualStop) {
+    performFullGameReset();
+    return;
+  }
+
   gameState = "finished";
   clearPendingRoundDeathRespawns();
   restoreRoundRespawnSettings();
   clearRemainingTimeHud();
   const center = activeRoundCenter;
   const dimension = getActiveRoundDimension();
-  clearSpawnedHakoinu(center, dimension);
+  const wasBox100 = box100.isBox100Mode();
+  if (wasBox100) {
+    box100.cleanupBox100(dimension);
+  } else {
+    clearSpawnedHakoinu(center, dimension);
+  }
   activeRoundCenter = null;
   activeRoundDimension = null;
 
   const players = world.getPlayers();
-  if (players.length > 0) {
+  if (!wasBox100 && players.length > 0) {
     removePlacedSubmissionChest(players[0].dimension);
   }
 
-  broadcast("§6ゲート閉鎖！ハコイヌたちの帰還結果を発表します！", {
-    priority: "high",
-  });
-  showRanking();
+  if (wasBox100) {
+    box100.showBox100Ranking();
+  } else {
+    broadcast("§6ゲート閉鎖！ハコイヌたちの帰還結果を発表します！", {
+      priority: "high",
+    });
+    showRanking();
+  }
   resetAllPlayersToLobbyInventory();
   logInfo("gate closed, game finished");
 }
@@ -698,12 +1110,21 @@ function beginManualGameEndCeremony() {
   resetEndCountdownSyncState();
   stopGameLoops();
   clearRemainingTimeHud();
-  clearSpawnedHakoinu(activeRoundCenter, getActiveRoundDimension());
+  if (box100.isBox100Mode()) {
+    // 閉鎖カウントダウン中はガラス箱を残す（落下死防止）。箱の削除はカウントダウン後
+    box100.cleanupBox100Entities(getActiveRoundDimension(), {
+      removeRooms: false,
+      removeShulkers: false,
+      removeNightVision: false,
+    });
+  } else {
+    clearSpawnedHakoinu(activeRoundCenter, getActiveRoundDimension());
+  }
   broadcast("§eゲートを手動で閉鎖します...", { priority: "high" });
 
   runGameEndCountdown(() => {
     if (gameState !== "closing") return;
-    finalizeGameAfterCeremony();
+    finalizeGameAfterCeremony({ manualStop: true });
   });
 }
 
@@ -714,7 +1135,11 @@ function beginTimedGameEndFinalize() {
   gameState = "closing";
   stopGameLoops();
   clearRemainingTimeHud();
-  clearSpawnedHakoinu(activeRoundCenter, getActiveRoundDimension());
+  if (box100.isBox100Mode()) {
+    box100.cleanupBox100Entities(getActiveRoundDimension());
+  } else {
+    clearSpawnedHakoinu(activeRoundCenter, getActiveRoundDimension());
+  }
   broadcast("§c§l時間切れ！§fゲートを閉鎖します...", { priority: "high" });
 
   const generation = ++endCountdownGeneration;
@@ -737,7 +1162,7 @@ function beginTimedGameEndFinalize() {
 function requestGameEnd(wasManualStop = false) {
   if (gameState === "finished" || gameState === "closing") return;
 
-  if (gameState === "running" && CONFIG.END_COUNTDOWN_ENABLED && wasManualStop) {
+  if (gameState === "running" && wasManualStop) {
     beginManualGameEndCeremony();
     return;
   }
@@ -749,7 +1174,7 @@ function requestGameEnd(wasManualStop = false) {
 
   stopGameLoops();
   clearRemainingTimeHud();
-  finalizeGameAfterCeremony();
+  finalizeGameAfterCeremony({ manualStop: wasManualStop });
 }
 
 // ---------------------------------------------------------------------------
@@ -1393,7 +1818,7 @@ function tickSpawnReplenish() {
 }
 
 function startSpawnReplenishLoop() {
-  if (!CONFIG.SPAWN_REPLENISH_ENABLED) return;
+  if (!CONFIG.SPAWN_REPLENISH_ENABLED || !box100.shouldReplenishSpawns()) return;
   if (spawnReplenishLoopId !== undefined) return;
   const intervalSec = Math.max(1, CONFIG.SPAWN_REPLENISH_INTERVAL_SECONDS ?? 4);
   spawnReplenishLoopId = system.runInterval(tickSpawnReplenish, intervalSec * TICKS_PER_SECOND);
@@ -1409,7 +1834,7 @@ function shouldKeepRobwWandItem(item) {
   return isRobwWandItemType(item.typeId);
 }
 
-/** 操作時計だけ残し、骨・毛皮などゲームアイテムを除去 */
+/** 操作アイテムだけ残し、骨・毛皮などゲームアイテムを除去 */
 function clearInventoryExceptWand(player) {
   const container = player.getComponent("inventory")?.container;
   if (!container) return 0;
@@ -1495,7 +1920,7 @@ function consumeItemFromInventory(player, typeId, amount) {
   return amount - remaining;
 }
 
-/** ラウンド中の死亡復帰時: 骨だけ開始時と同数に補充（時計はホストのみ保持） */
+/** ラウンド中の死亡復帰時: 骨だけ開始時と同数に補充（操作アイテムはホストのみ保持） */
 function giveRoundRespawnBones(player) {
   if (!player?.isValid) return 0;
 
@@ -1563,7 +1988,7 @@ function getActiveBoxGate() {
 }
 
 // ---------------------------------------------------------------------------
-// セッションホスト（ゲート起動・操作時計はホストのみ）
+// セッションホスト（ゲート起動・操作アイテムはホストのみ）
 // ---------------------------------------------------------------------------
 
 /** @param {import("@minecraft/server").Player} player */
@@ -1687,7 +2112,1711 @@ function isPlayerFlying(player) {
   return false;
 }
 
-/** @returns {{ ok: true, center: { x: number, y: number, z: number, radius: number }, chestSpot: { x: number, y: number, z: number, footY: number }, dimension: import("@minecraft/server").Dimension } | { ok: false, message: string, reason: string }} */
+function getConfiguredRoundStages() {
+  const stages = CONFIG.ROUND_STAGES;
+  if (Array.isArray(stages) && stages.length > 0) {
+    return stages;
+  }
+  return [{ id: "here", label: "今の位置（ホスト足元）", locate: null }];
+}
+
+function getRoundStageTravelStages() {
+  return getConfiguredRoundStages().filter((stage) => stage.locate);
+}
+
+function getRoundStageTravelMenuEntries() {
+  return getRoundStageTravelStages().map((stage) => ({
+    id: stage.id,
+    label: stage.label,
+  }));
+}
+
+function getStructureLocateShortcutStages() {
+  const ids = new Set(CONFIG.STRUCTURE_LOCATE_SHORTCUT_STAGE_IDS ?? []);
+  return getRoundStageTravelStages().filter((stage) => ids.has(stage.id));
+}
+
+function getStructureFindMenuEntries() {
+  return getStructureLocateShortcutStages().map((stage) => ({
+    id: stage.id,
+    label: `${stage.label}を探す`,
+  }));
+}
+
+function getStructureRegisterMenuEntries() {
+  return getStructureLocateShortcutStages().map((stage) => ({
+    id: stage.id,
+    label: stage.label,
+  }));
+}
+
+function structureLocateCacheTrustsProximity(entry) {
+  const source = entry?.source ?? "";
+  return source !== "registered" && source !== "manual";
+}
+
+function findRoundStageTravelIndexById(stageId) {
+  const id = String(stageId ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+  return getRoundStageTravelStages().findIndex((stage) => stage.id === id);
+}
+
+/** /locate structure の引数（Bedrock は minecraft: 付きが正） */
+const STRUCTURE_LOCATE_ALIASES = {
+  village: ["minecraft:village", "village"],
+  pillager_outpost: ["minecraft:pillager_outpost", "pillager_outpost"],
+  desert_pyramid: ["minecraft:desert_pyramid", "desert_pyramid"],
+  jungle_pyramid: ["minecraft:jungle_pyramid", "jungle_pyramid"],
+  swamp_hut: ["minecraft:swamp_hut", "swamp_hut"],
+  igloo: ["minecraft:igloo", "igloo"],
+  monument: ["minecraft:monument", "monument"],
+  mansion: ["minecraft:mansion", "mansion"],
+  stronghold: ["minecraft:stronghold", "stronghold"],
+  ruined_portal: ["minecraft:ruined_portal", "ruined_portal"],
+  shipwreck: ["minecraft:shipwreck", "shipwreck"],
+  buried_treasure: ["minecraft:buried_treasure", "buried_treasure"],
+  trail_ruins: ["minecraft:trail_ruins", "trail_ruins"],
+  ancient_city: ["minecraft:ancient_city", "ancient_city"],
+};
+
+function normalizeStructureToken(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/^minecraft:/, "")
+    .replace(/\s+/g, "_");
+}
+
+/** チャット表示・runCommand 用の locate 構造物 ID（常に minecraft: 付きを先に） */
+function toLocateStructureId(structureId) {
+  const key = normalizeStructureToken(structureId);
+  if (!key) return String(structureId ?? "");
+  return `minecraft:${key}`;
+}
+
+function getStructureLocateAliases(structureId) {
+  const key = normalizeStructureToken(structureId);
+  const aliases = STRUCTURE_LOCATE_ALIASES[key];
+  if (aliases?.length) return aliases;
+  return [toLocateStructureId(structureId), key];
+}
+
+function parseCoordsFromText(text) {
+  const source = String(text ?? "");
+  if (!source) return null;
+
+  const bracket = source.match(/\[(-?\d+)\s*,\s*(-?\d+|~)\s*,\s*(-?\d+)\]/);
+  if (bracket) {
+    return {
+      x: Number.parseInt(bracket[1], 10),
+      y: bracket[2] === "~" ? undefined : Number.parseInt(bracket[2], 10),
+      z: Number.parseInt(bracket[3], 10),
+    };
+  }
+
+  const paren = source.match(/\((-?\d+)\s*,\s*(-?\d+|~)\s*,\s*(-?\d+)\)/);
+  if (paren) {
+    return {
+      x: Number.parseInt(paren[1], 10),
+      y: paren[2] === "~" ? undefined : Number.parseInt(paren[2], 10),
+      z: Number.parseInt(paren[3], 10),
+    };
+  }
+
+  const triple = source.match(/(-?\d+)\s+(-?\d+)\s+(-?\d+)/);
+  if (triple) {
+    return {
+      x: Number.parseInt(triple[1], 10),
+      y: Number.parseInt(triple[2], 10),
+      z: Number.parseInt(triple[3], 10),
+    };
+  }
+
+  return null;
+}
+
+function commandResultToText(result) {
+  if (!result) return "";
+  const chunks = [];
+  const visited = new Set();
+  const queue = [result];
+
+  while (queue.length > 0) {
+    const value = queue.shift();
+    if (!value || typeof value !== "object" || visited.has(value)) continue;
+    visited.add(value);
+
+    for (const key of Reflect.ownKeys(value)) {
+      try {
+        const child = value[key];
+        if (typeof child === "string" && child.trim()) {
+          chunks.push(child);
+        } else if (child && typeof child === "object") {
+          queue.push(child);
+        }
+      } catch {
+        // ignore inaccessible properties
+      }
+    }
+  }
+
+  return chunks.join(" ");
+}
+
+function parseLocateDistanceFromText(text) {
+  const source = String(text ?? "");
+  if (!source) return null;
+
+  const patterns = [
+    /(\d+)\s*(?:blocks away|blocks? away)/i,
+    /(\d+)\s*ブロック先/,
+    /（\s*(\d+)\s*ブロック先\s*）/,
+    /\(\s*(\d+)\s*blocks away\s*\)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    if (match) {
+      const distance = Number.parseInt(match[1], 10);
+      if (Number.isFinite(distance) && distance > 0) {
+        return distance;
+      }
+    }
+  }
+
+  return null;
+}
+
+function sampleChunkOnRing(originCx, originCz, ringChunks, samples) {
+  if (ringChunks <= 0) {
+    return [{ cx: originCx, cz: originCz }];
+  }
+
+  const chunks = [];
+  for (let i = 0; i < samples; i += 1) {
+    const angle = (Math.PI * 2 * i) / samples;
+    const dx = Math.round(Math.cos(angle) * ringChunks);
+    const dz = Math.round(Math.sin(angle) * ringChunks);
+    chunks.push({ cx: originCx + dx, cz: originCz + dz });
+  }
+  return chunks;
+}
+
+function buildStructureSampleChunkQueue(originCx, originCz, maxProbes, hintDistance) {
+  const queue = [];
+  const maxRing = Math.max(
+    1,
+    Math.ceil((CONFIG.STAGE_LOCATE_MAX_SCAN_BLOCKS ?? 8192) / 16)
+  );
+
+  const pushSamples = (ring, samples) => {
+    for (const chunk of sampleChunkOnRing(originCx, originCz, ring, samples)) {
+      queue.push(chunk);
+      if (queue.length >= maxProbes) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (hintDistance && hintDistance > 0) {
+    const centerRing = Math.max(1, Math.round(hintDistance / 16));
+    for (const offset of [-4, -2, -1, 0, 1, 2, 4]) {
+      const ring = centerRing + offset;
+      if (ring < 0 || ring > maxRing) continue;
+      const samples = ring <= 8 ? 12 : ring <= 32 ? 20 : 32;
+      if (pushSamples(ring, samples)) {
+        return queue.slice(0, maxProbes);
+      }
+    }
+  }
+
+  if (pushSamples(0, 1)) {
+    return queue.slice(0, maxProbes);
+  }
+
+  for (let ring = 4; ring <= maxRing; ring += 4) {
+    const samples = ring <= 16 ? 12 : ring <= 64 ? 20 : 32;
+    if (pushSamples(ring, samples)) {
+      break;
+    }
+  }
+
+  return queue.slice(0, maxProbes);
+}
+
+function buildPlayerNearProbePoints(origin, hintDistance) {
+  const maxRadius = Math.max(
+    256,
+    CONFIG.STAGE_LOCATE_MAX_SCAN_BLOCKS ?? 8192
+  );
+  const points = [];
+
+  if (hintDistance && hintDistance > 0) {
+    const directions = 24;
+    for (const offset of [-128, -64, 0, 64, 128]) {
+      const distance = hintDistance + offset;
+      if (distance < 128 || distance > maxRadius) continue;
+      for (let i = 0; i < directions; i += 1) {
+        const angle = (Math.PI * 2 * i) / directions;
+        points.push({
+          x: origin.x + Math.cos(angle) * distance,
+          z: origin.z + Math.sin(angle) * distance,
+        });
+      }
+    }
+  }
+
+  const directions = 8;
+  for (const distance of [
+    128, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192,
+  ]) {
+    if (distance > maxRadius) continue;
+    for (let i = 0; i < directions; i += 1) {
+      const angle = (Math.PI * 2 * i) / directions;
+      points.push({
+        x: origin.x + Math.cos(angle) * distance,
+        z: origin.z + Math.sin(angle) * distance,
+      });
+    }
+  }
+
+  const maxProbes = Math.max(
+    8,
+    CONFIG.STAGE_LOCATE_MAX_PROBES ?? 48
+  );
+  return points.slice(0, maxProbes);
+}
+
+let structureLocateAreaSerial = 0;
+
+function loadChunkWithTickingArea(manager, dimension, cx, cz) {
+  const areaId = `robw_loc_${structureLocateAreaSerial++}`;
+  const options = {
+    dimension,
+    from: { x: cx * 16, y: -64, z: cz * 16 },
+    to: { x: cx * 16 + 15, y: 319, z: cz * 16 + 15 },
+  };
+
+  try {
+    const created = manager.createTickingArea(areaId, options);
+    if (created && typeof created.then === "function") {
+      return created.then(() => areaId);
+    }
+    return Promise.resolve(areaId);
+  } catch (error) {
+    try {
+      manager.removeTickingArea(areaId);
+    } catch {
+      // ignore cleanup errors
+    }
+    return Promise.reject(error);
+  }
+}
+
+function removeTickingAreaSafe(manager, areaId) {
+  try {
+    manager.removeTickingArea(areaId);
+  } catch {
+    // ignore cleanup errors
+  }
+}
+
+/** @param {import("@minecraft/server").CommandResult | undefined} result */
+function locateCommandResultText(result) {
+  if (!result) return "";
+  const parts = [];
+  if (typeof result.statusMessage === "string" && result.statusMessage.trim()) {
+    parts.push(result.statusMessage.trim());
+  }
+  const walked = commandResultToText(result);
+  if (walked && !parts.includes(walked)) {
+    parts.push(walked);
+  }
+  return parts.join(" ");
+}
+
+/** @param {import("@minecraft/server").CommandResult | undefined} result */
+function parseLocateCommandResult(result) {
+  const sources = [locateCommandResultText(result)];
+  if (typeof result?.statusMessage === "string") {
+    sources.unshift(result.statusMessage);
+  }
+
+  for (const source of sources) {
+    const parsed = parseCoordsFromText(source);
+    if (parsed) return parsed;
+  }
+
+  return null;
+}
+
+/** Bedrock のブロック Y 範囲（ビルド限界） */
+const ROBW_WORLD_MIN_Y = -64;
+const ROBW_WORLD_MAX_Y = 319;
+
+function clampBlockY(y, fallback = 64) {
+  const n = Number(y);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.floor(n), ROBW_WORLD_MIN_Y), ROBW_WORLD_MAX_Y);
+}
+
+function isPlausibleBlockY(y) {
+  const n = Number(y);
+  return Number.isFinite(n) && n >= ROBW_WORLD_MIN_Y && n <= ROBW_WORLD_MAX_Y;
+}
+
+function sanitizeLocatedCoords(located) {
+  if (!located || !Number.isFinite(located.x) || !Number.isFinite(located.z)) {
+    return null;
+  }
+  const out = { x: located.x, z: located.z };
+  if (located.y != null && Number.isFinite(located.y)) {
+    out.y = clampBlockY(located.y);
+  }
+  return out;
+}
+
+/** locate で得た座標が足元付近（誤パース）でないか */
+function isPlausibleStructureLocate(player, located, minDistBlocks = 48) {
+  if (!player?.isValid || !located) return false;
+  if (located.y != null && !isPlausibleBlockY(located.y)) return false;
+  const dx = located.x - player.location.x;
+  const dz = located.z - player.location.z;
+  const minDist = Math.max(16, minDistBlocks);
+  return dx * dx + dz * dz >= minDist * minDist;
+}
+
+function structureLocateUsesGeneratedStructuresApi(dimension) {
+  return typeof dimension?.getGeneratedStructures === "function";
+}
+
+function countEntitiesNear(dimension, location, filter, maxDistance) {
+  try {
+    return dimension.getEntities({ ...filter, location, maxDistance }).length;
+  } catch {
+    return 0;
+  }
+}
+
+function findBlocksNear(dimension, x, y, z, radius, predicate) {
+  const bx = Math.floor(x);
+  const by = Math.floor(y);
+  const bz = Math.floor(z);
+
+  for (let dy = -radius; dy <= radius; dy += 1) {
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      for (let dz = -radius; dz <= radius; dz += 1) {
+        if (Math.abs(dx) + Math.abs(dz) > radius + 2) continue;
+        try {
+          const block = dimension.getBlock({ x: bx + dx, y: by + dy, z: bz + dz });
+          if (block?.isValid && predicate(block)) {
+            return true;
+          }
+        } catch {
+          // chunk may still be loading
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+function findStructureNearPlayerFallback(dimension, player, structureId) {
+  if (!player?.isValid) return null;
+
+  const key = normalizeStructureToken(structureId);
+  const loc = player.location;
+  const px = Math.floor(loc.x);
+  const py = Math.floor(loc.y);
+  const pz = Math.floor(loc.z);
+
+  if (key === "pillager_outpost") {
+    if (
+      countEntitiesNear(dimension, loc, { type: "minecraft:pillager" }, 96) > 0 ||
+      countEntitiesNear(dimension, loc, { type: "minecraft:iron_golem" }, 96) > 0
+    ) {
+      return { x: px, y: py, z: pz };
+    }
+    return null;
+  }
+
+  if (key === "village") {
+    if (
+      countEntitiesNear(dimension, loc, { type: "minecraft:villager" }, 72) > 0 ||
+      countEntitiesNear(dimension, loc, { type: "minecraft:iron_golem" }, 96) > 0
+    ) {
+      return { x: px, y: py, z: pz };
+    }
+    return null;
+  }
+
+  if (key === "igloo") {
+    const looksLikeIgloo = findBlocksNear(
+      dimension,
+      px,
+      py,
+      pz,
+      10,
+      (block) => {
+        const id = block.typeId;
+        return (
+          id === "minecraft:snow_block" ||
+          id === "minecraft:packed_ice" ||
+          id === "minecraft:red_carpet" ||
+          id === "minecraft:white_carpet"
+        );
+      }
+    );
+    if (looksLikeIgloo) {
+      return { x: px, y: py, z: pz };
+    }
+    return null;
+  }
+
+  if (key === "desert_pyramid") {
+    if (
+      findBlocksNear(dimension, px, py, pz, 16, (block) => {
+        const id = block.typeId;
+        return id === "minecraft:orange_terracotta" || id === "minecraft:chiseled_sandstone";
+      })
+    ) {
+      return { x: px, y: py, z: pz };
+    }
+    return null;
+  }
+
+  if (key === "swamp_hut") {
+    if (
+      countEntitiesNear(dimension, loc, { type: "minecraft:witch" }, 48) > 0 ||
+      findBlocksNear(dimension, px, py, pz, 12, (block) => block.typeId === "minecraft:cauldron")
+    ) {
+      return { x: px, y: py, z: pz };
+    }
+    return null;
+  }
+
+  return null;
+}
+
+/** 構造物ごとの最寄り座標キャッシュ（dimensionKey:structureKey → coords） */
+const structureLocateCoordCache = new Map();
+let structurePrefetchRunning = false;
+let structurePrefetchScheduled = false;
+let structurePrefetchLoggedApi = false;
+
+function structureLocateCacheKey(dimensionId, structureId) {
+  return `${normalizeStructureToken(dimensionId) || "overworld"}:${normalizeStructureToken(structureId)}`;
+}
+
+function getCachedStructureCoords(dimensionId, structureId, player = null) {
+  const entry = structureLocateCoordCache.get(
+    structureLocateCacheKey(dimensionId, structureId)
+  );
+  if (!entry || !Number.isFinite(entry.x) || !Number.isFinite(entry.z)) {
+    return null;
+  }
+  if (entry.y != null && !isPlausibleBlockY(entry.y)) {
+    structureLocateCoordCache.delete(
+      structureLocateCacheKey(dimensionId, structureId)
+    );
+    return null;
+  }
+  if (
+    player?.isValid &&
+    structureLocateCacheTrustsProximity(entry) &&
+    !isPlausibleStructureLocate(player, entry, 24)
+  ) {
+    structureLocateCoordCache.delete(
+      structureLocateCacheKey(dimensionId, structureId)
+    );
+    return null;
+  }
+  return entry;
+}
+
+function setCachedStructureCoords(dimensionId, structureId, located, source = "unknown") {
+  if (!located || !Number.isFinite(located.x) || !Number.isFinite(located.z)) {
+    return;
+  }
+  structureLocateCoordCache.set(structureLocateCacheKey(dimensionId, structureId), {
+    x: Math.floor(located.x),
+    y:
+      located.y === undefined
+        ? undefined
+        : clampBlockY(located.y, Math.floor(located.y)),
+    z: Math.floor(located.z),
+    source,
+    at: Date.now(),
+  });
+}
+
+function formatLocateStructureCommand(structureId) {
+  return `/locate structure ${toLocateStructureId(structureId)}`;
+}
+
+/** runCommand 用（先頭スラッシュなし）。Bedrock は execute in に minecraft: 付き次元名は使えない */
+function buildLocateStructureRunCommands(structureId) {
+  const commands = [];
+  for (const alias of getStructureLocateAliases(structureId)) {
+    const cmd = `locate structure ${alias}`;
+    if (!commands.includes(cmd)) {
+      commands.push(cmd);
+    }
+  }
+  return commands;
+}
+
+function runLocateStructureCommandInternal(player, structureId, options = {}) {
+  const silent = options.silent === true;
+  if (!player?.isValid || typeof player.runCommand !== "function") {
+    return { ran: false, located: null, success: false, hintDistance: null, lastText: "" };
+  }
+
+  for (const cmd of buildLocateStructureRunCommands(structureId)) {
+    try {
+      const result = player.runCommand(cmd);
+      const success = (result?.successCount ?? 0) > 0;
+      const text = locateCommandResultText(result);
+      const hintDistance = parseLocateDistanceFromText(text);
+      if (!silent) {
+        logInfo(
+          `locate run (${cmd}): success=${result?.successCount ?? 0} hint=${hintDistance ?? "none"} status=${result?.statusMessage ?? ""} text=${text}`
+        );
+      }
+
+      const located = parseLocateCommandResult(result);
+      if (located) {
+        return {
+          ran: true,
+          located,
+          success: true,
+          hintDistance,
+          lastText: text,
+        };
+      }
+
+      if (success) {
+        return {
+          ran: true,
+          located: null,
+          success: true,
+          hintDistance,
+          lastText: text,
+        };
+      }
+    } catch (error) {
+      logWarn(`locate command failed (${cmd}): ${error}`);
+    }
+  }
+
+  return {
+    ran: true,
+    located: null,
+    success: false,
+    hintDistance: null,
+    lastText: "",
+  };
+}
+
+/**
+ * locate 手動実行の案内（runCommand は使わない。Script 経由では座標がチャットに出ないことがある）
+ */
+function showStructureLocateManualGuide(player, stage) {
+  if (!player?.isValid || !stage?.locate) return false;
+
+  const cmd = formatLocateStructureCommand(stage.locate);
+  const label = stage.label ?? stage.id;
+
+  robwPlayerMessage(player, `§6--- ${label}を探す ---`);
+  robwPlayerMessage(
+    player,
+    `§7${label}を探すには、チャットに以下を入力してください。`
+  );
+  robwPlayerMessage(player, `§f${cmd}`);
+  robwPlayerMessage(
+    player,
+    "§7座標が表示されたら、その場所へ移動して、"
+  );
+  robwPlayerMessage(
+    player,
+    "§7ROBWメニューから §f現在地をステージ登録 §7を実行してください。"
+  );
+  robwPlayerMessage(
+    player,
+    "§8座標が出ない場合: §f/gamerule sendcommandfeedback true"
+  );
+  robwPlayerMessage(player, "§8§f/gamerule commandblockoutput true");
+
+  logInfo(`structure find guide shown: ${stage.id} cmd=${cmd}`);
+  return true;
+}
+
+function hostMatchesStageDimension(host, dimensionId = "overworld") {
+  if (!host?.isValid) return false;
+  try {
+    const dimension = world.getDimension(dimensionId);
+    return dimension && host.dimension?.id === dimension.id;
+  } catch {
+    return false;
+  }
+}
+
+function registerStructureStageFromCurrentLocation(host, stage) {
+  const dimensionId = stage.dimension ?? "overworld";
+  if (!hostMatchesStageDimension(host, dimensionId)) {
+    robwPlayerMessage(
+      host,
+      `§c「${stage.label}」は ${dimensionId} で登録してください。`
+    );
+    return;
+  }
+
+  if (isPlayerFlying(host)) {
+    robwPlayerMessage(
+      host,
+      "§c飛行中は登録できません。地面に立ってから試してください。"
+    );
+    return;
+  }
+
+  let dimension;
+  try {
+    dimension = world.getDimension(dimensionId);
+  } catch (error) {
+    logWarn(`stage register dimension failed (${dimensionId}): ${error}`);
+    robwPlayerMessage(host, "§cステージ用ディメンションを開けませんでした。");
+    return;
+  }
+
+  const loc = host.location;
+  const bx = Math.floor(loc.x);
+  const bz = Math.floor(loc.z);
+  const hintY = clampBlockY(loc.y);
+  const chestY = findRoundStartSurfaceY(dimension, bx, bz, hintY);
+  const validation =
+    findNearbyRoundStartValidation(dimension, bx, bz, hintY, stage.label) ??
+    (chestY === null
+      ? null
+      : buildRoundStartValidation(dimension, bx, chestY, bz, stage.label));
+
+  if (!validation?.ok) {
+    robwPlayerMessage(
+      host,
+      validation?.message ??
+        `§c「${stage.label}」を登録できる平坦な足元がありません。`
+    );
+    logWarn(`stage register blocked: ${stage.id} reason=${validation?.reason ?? "unknown"}`);
+    return;
+  }
+
+  setCachedStructureCoords(
+    dimensionId,
+    stage.locate,
+    {
+      x: validation.center.x,
+      y: validation.center.y,
+      z: validation.center.z,
+    },
+    "registered"
+  );
+  robwPlayerMessage(
+    host,
+    `§a「${stage.label}」を現在地で登録しました。§7構造物へ移動から即移動できます。`
+  );
+  logInfo(
+    `stage registered: ${stage.locate} (${validation.center.x}, ${validation.center.y}, ${validation.center.z})`
+  );
+}
+
+function triggerLocateStructureCommand(player, structureId, dimensionId = "overworld", options = {}) {
+  const silent = options.silent === true;
+  const displayCmd = formatLocateStructureCommand(structureId);
+
+  if (!silent) {
+    robwPlayerMessage(player, `§7実行: §f${displayCmd}`);
+  }
+
+  const result = runLocateStructureCommandInternal(player, structureId);
+  if (result.located && isPlausibleStructureLocate(player, result.located)) {
+    setCachedStructureCoords(dimensionId, structureId, result.located, "locate");
+  } else if (result.located) {
+    result.located = null;
+  }
+
+  if (!silent && result.ran && !result.success) {
+    robwPlayerMessage(
+      player,
+      `§c自動実行に失敗しました。チャットに §f${displayCmd} §cを貼って手動実行してください。`
+    );
+  }
+
+  return result;
+}
+
+/**
+ * locate の成否だけを使い最寄り構造物のおおよその座標を求める（Script に座標文字列が無いとき）
+ */
+function surveyStructureCoordsByLocate(player, structureId, origin, dimension) {
+  if (!player?.isValid) return null;
+
+  const ox = origin.x;
+  const oy = origin.y;
+  const oz = origin.z;
+  const maxDist = Math.min(
+    4096,
+    CONFIG.STAGE_LOCATE_PREFETCH_SCAN_BLOCKS ??
+      CONFIG.STAGE_LOCATE_MAX_SCAN_BLOCKS ??
+      8192
+  );
+
+  const tpForSurvey = (x, y, z) => {
+    const bx = Math.floor(x);
+    const by = clampBlockY(y, clampBlockY(oy));
+    const bz = Math.floor(z);
+    if (typeof player.runCommand === "function") {
+      try {
+        player.runCommand(`tp @s ${bx} ${by} ${bz}`);
+        return true;
+      } catch {
+        // fall through
+      }
+    }
+    try {
+      player.teleport(
+        { x: bx + 0.5, y: by, z: bz + 0.5 },
+        { dimension: dimension ?? player.dimension, keepVelocity: false }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const locateStillFindsStructure = () =>
+    runLocateStructureCommandInternal(player, structureId, { silent: true }).success;
+
+  let bestRay = { failDist: Infinity, dx: 1, dz: 0 };
+
+  for (let i = 0; i < 4; i += 1) {
+    const angle = (Math.PI * 2 * i) / 4;
+    const dx = Math.cos(angle);
+    const dz = Math.sin(angle);
+    let lo = 0;
+    let hi = maxDist;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      tpForSurvey(ox + dx * mid, oy, oz + dz * mid);
+      if (locateStillFindsStructure()) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    const failDist = lo;
+    if (failDist < bestRay.failDist) {
+      bestRay = { failDist, dx, dz };
+    }
+  }
+
+  if (bestRay.failDist <= 0 || bestRay.failDist >= maxDist - 16) {
+    return null;
+  }
+
+  let lo = 0;
+  let hi = bestRay.failDist;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    tpForSurvey(ox + bestRay.dx * mid, oy, oz + bestRay.dz * mid);
+    if (locateStillFindsStructure()) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const entryDist = Math.max(0, lo - 1);
+  const ex = ox + bestRay.dx * entryDist;
+  const ez = oz + bestRay.dz * entryDist;
+  const y = getStructureScanY(dimension, ex, ez, oy);
+
+  return { x: Math.floor(ex), y, z: Math.floor(ez) };
+}
+
+function resolveStructureCoordsForTravel(host, stage, dimension, triggered) {
+  if (triggered.located) {
+    return triggered.located;
+  }
+  if (triggered.lastText) {
+    const parsed = parseCoordsFromText(triggered.lastText);
+    if (parsed) return parsed;
+  }
+  if (!triggered.success) {
+    return null;
+  }
+
+  const origin = {
+    x: host.location.x,
+    y: host.location.y,
+    z: host.location.z,
+  };
+
+  try {
+    const surveyed = surveyStructureCoordsByLocate(
+      host,
+      stage.locate,
+      origin,
+      dimension
+    );
+    if (surveyed && isPlausibleStructureLocate(host, surveyed)) {
+      setCachedStructureCoords(
+        stage.dimension ?? "overworld",
+        stage.locate,
+        surveyed,
+        "survey"
+      );
+      logInfo(
+        `structure survey ${stage.locate}: (${surveyed.x}, ${surveyed.y}, ${surveyed.z})`
+      );
+    }
+    return surveyed;
+  } finally {
+    restorePlayerPosition(host, origin, dimension);
+  }
+}
+
+function triggerLocateStructureCommandAsync(
+  player,
+  structureId,
+  dimensionId = "overworld",
+  options = {}
+) {
+  const silent = options.silent !== false;
+  return new Promise((resolve) => {
+    system.run(() => {
+      if (!player?.isValid) {
+        resolve({
+          ran: false,
+          located: null,
+          success: false,
+          hintDistance: null,
+          lastText: "",
+        });
+        return;
+      }
+
+      if (silent) {
+        const result = runLocateStructureCommandInternal(player, structureId, {
+          silent: true,
+        });
+        if (result.located && !isPlausibleStructureLocate(player, result.located)) {
+          result.located = null;
+        }
+        resolve(result);
+        return;
+      }
+
+      resolve(triggerLocateStructureCommand(player, structureId, dimensionId));
+    });
+  });
+}
+
+function structureEntryToTokens(entry) {
+  const tokens = [];
+  if (entry == null) return tokens;
+
+  if (typeof entry === "string") {
+    tokens.push(normalizeStructureToken(entry));
+    return tokens;
+  }
+
+  tokens.push(normalizeStructureToken(String(entry)));
+  if (typeof entry === "object" && entry.id != null) {
+    tokens.push(normalizeStructureToken(entry.id));
+  }
+  return tokens;
+}
+
+/** @type {Record<string, string[]>} */
+const STRUCTURE_LOOSE_MATCH_HINTS = {
+  pillager_outpost: ["pillager", "outpost"],
+  village: ["village"],
+  desert_pyramid: ["desert", "pyramid"],
+  jungle_pyramid: ["jungle", "pyramid"],
+  swamp_hut: ["swamp", "hut"],
+  igloo: ["igloo"],
+  monument: ["monument"],
+  mansion: ["mansion"],
+  stronghold: ["stronghold"],
+  ruined_portal: ["ruined", "portal"],
+  shipwreck: ["shipwreck"],
+  buried_treasure: ["buried", "treasure"],
+  trail_ruins: ["trail", "ruins"],
+  ancient_city: ["ancient", "city"],
+};
+
+function structureListMatchesTarget(structures, structureId) {
+  if (!Array.isArray(structures) || structures.length <= 0) return false;
+
+  const targets = new Set(
+    getStructureLocateAliases(structureId).map((id) => normalizeStructureToken(id))
+  );
+  const key = normalizeStructureToken(structureId);
+  const looseHints = STRUCTURE_LOOSE_MATCH_HINTS[key] ?? [];
+
+  return structures.some((entry) => {
+    for (const norm of structureEntryToTokens(entry)) {
+      if (targets.has(norm)) return true;
+      for (const target of targets) {
+        if (norm.includes(target) || target.includes(norm)) return true;
+      }
+      if (
+        looseHints.length >= 2 &&
+        looseHints.every((hint) => norm.includes(hint))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+function getStructureScanY(dimension, x, z, hintY = 64) {
+  const bx = Math.floor(x);
+  const bz = Math.floor(z);
+
+  if (typeof dimension.getTopmostBlock === "function") {
+    try {
+      const top = dimension.getTopmostBlock({ x: bx, z: bz });
+      if (top?.isValid) {
+        return top.location.y;
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  const startY = clampBlockY(hintY);
+  const probeTop = Math.min(startY + 32, ROBW_WORLD_MAX_Y);
+  for (let y = probeTop; y >= ROBW_WORLD_MIN_Y; y--) {
+    try {
+      const block = dimension.getBlock({ x: bx, y, z: bz });
+      if (block?.isValid && !block.isAir && !block.isLiquid) {
+        return y;
+      }
+    } catch {
+      // chunk / boundary
+    }
+  }
+
+  return startY;
+}
+
+function findStructureAtBlock(dimension, x, z, structureId, hintY) {
+  if (typeof dimension.getGeneratedStructures !== "function") {
+    return null;
+  }
+
+  const bx = Math.floor(x);
+  const bz = Math.floor(z);
+  const yCandidates = new Set();
+  const baseY = hintY ?? getStructureScanY(dimension, bx, bz);
+  yCandidates.add(baseY);
+  yCandidates.add(baseY + 16);
+  yCandidates.add(baseY + 32);
+  yCandidates.add(baseY - 16);
+  for (let y = 48; y <= 160; y += 16) {
+    yCandidates.add(y);
+  }
+
+  for (const y of yCandidates) {
+    try {
+      const structures = dimension.getGeneratedStructures({ x: bx, y, z: bz });
+      if (!structureListMatchesTarget(structures, structureId)) {
+        continue;
+      }
+      return { x: bx, y, z: bz };
+    } catch {
+      // try next height
+    }
+  }
+
+  return null;
+}
+
+function findStructureAtPlayerColumn(dimension, player, structureId, options = {}) {
+  if (!player?.isValid) return null;
+
+  if (structureLocateUsesGeneratedStructuresApi(dimension)) {
+    const px = Math.floor(player.location.x);
+    const pz = Math.floor(player.location.z);
+    const yCandidates = new Set([Math.floor(player.location.y)]);
+    for (let dy = -48; dy <= 96; dy += 16) {
+      yCandidates.add(Math.floor(player.location.y) + dy);
+    }
+    for (let y = 48; y <= 200; y += 16) {
+      yCandidates.add(y);
+    }
+
+    for (const y of yCandidates) {
+      try {
+        const structures = dimension.getGeneratedStructures({ x: px, y, z: pz });
+        if (!Array.isArray(structures) || structures.length <= 0) {
+          continue;
+        }
+
+        if (options.logSample && typeof options.onSample === "function") {
+          options.onSample(structures);
+        }
+
+        if (!structureListMatchesTarget(structures, structureId)) {
+          continue;
+        }
+
+        return { x: px, y, z: pz, via: "api" };
+      } catch (error) {
+        logWarn(`getGeneratedStructures failed at (${px},${y},${pz}): ${error}`);
+      }
+    }
+  }
+
+  const fallbackHit = findStructureNearPlayerFallback(dimension, player, structureId);
+  if (fallbackHit) {
+    return { ...fallbackHit, via: "fallback" };
+  }
+
+  return null;
+}
+
+function findNearestStructureByScan(dimension, origin, structureId, maxRadiusOverride) {
+  if (typeof dimension.getGeneratedStructures !== "function") {
+    return null;
+  }
+
+  const step = Math.max(16, CONFIG.STAGE_LOCATE_SCAN_STEP ?? 128);
+  const maxRadius = Math.max(
+    step,
+    maxRadiusOverride ?? CONFIG.STAGE_LOCATE_MAX_SCAN_BLOCKS ?? 4096
+  );
+  const originX = Math.floor(origin.x);
+  const originZ = Math.floor(origin.z);
+
+  for (let radius = 0; radius <= maxRadius; radius += step) {
+    if (radius === 0) {
+      const hit = findStructureAtBlock(dimension, originX, originZ, structureId);
+      if (hit) {
+        logInfo(
+          `structure scan hit ${structureId} at (${hit.x}, ${hit.y}, ${hit.z}) r=0`
+        );
+        return hit;
+      }
+      continue;
+    }
+
+    for (let dx = -radius; dx <= radius; dx += step) {
+      for (let dz = -radius; dz <= radius; dz += step) {
+        if (Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
+        const hit = findStructureAtBlock(
+          dimension,
+          originX + dx,
+          originZ + dz,
+          structureId
+        );
+        if (hit) {
+          logInfo(
+            `structure scan hit ${structureId} at (${hit.x}, ${hit.y}, ${hit.z}) r=${radius}`
+          );
+          return hit;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function findStructureNearPlayer(dimension, player, structureId) {
+  return findStructureAtPlayerColumn(dimension, player, structureId);
+}
+
+const activeStructureLocateHostIds = new Set();
+
+function scheduleStructureLocatePrefetch(host, delayTicks = 80) {
+  if (CONFIG.STAGE_LOCATE_PREFETCH_ON_JOIN === false) return;
+  if (!host?.isValid || !isSessionHost(host)) return;
+  if (structurePrefetchScheduled || structurePrefetchRunning) return;
+  structurePrefetchScheduled = true;
+
+  system.runTimeout(() => {
+    if (!host?.isValid) return;
+    runStructureLocatePrefetch(host, 0);
+  }, delayTicks);
+}
+
+function runStructureLocatePrefetch(host, index) {
+  const stages = getRoundStageTravelStages();
+  if (!host?.isValid || index >= stages.length) {
+    structurePrefetchRunning = false;
+    const count = structureLocateCoordCache.size;
+    logInfo(`structure prefetch done: cached=${count}`);
+    if (host?.isValid && count > 0) {
+      robwPlayerMessage(
+        host,
+        `§7[ROBW] 構造物座標を ${count} 件キャッシュしました。locate メニューからすぐ移動できます。`
+      );
+    } else if (host?.isValid) {
+      robwPlayerMessage(
+        host,
+        "§7[ROBW] 入場時キャッシュは未作成です。構造物を選ぶと座標を特定して移動します（数秒かかることがあります）。"
+      );
+    }
+    return;
+  }
+
+  structurePrefetchRunning = true;
+  const stage = stages[index];
+  const dimensionId = stage.dimension ?? "overworld";
+  let dimension;
+  try {
+    dimension = world.getDimension(dimensionId);
+  } catch (error) {
+    logWarn(`structure prefetch dimension failed (${dimensionId}): ${error}`);
+    system.runTimeout(() => runStructureLocatePrefetch(host, index + 1), 5);
+    return;
+  }
+
+  if (!structurePrefetchLoggedApi) {
+    structurePrefetchLoggedApi = true;
+    logInfo(
+      `structure prefetch: getGeneratedStructures=${structureLocateUsesGeneratedStructuresApi(dimension) ? "yes" : "no"}`
+    );
+  }
+
+  if (!getCachedStructureCoords(dimensionId, stage.locate)) {
+    if (structureLocateUsesGeneratedStructuresApi(dimension)) {
+      const hit = findNearestStructureByScan(
+        dimension,
+        host.location,
+        stage.locate,
+        CONFIG.STAGE_LOCATE_PREFETCH_SCAN_BLOCKS ??
+          CONFIG.STAGE_LOCATE_MAX_SCAN_BLOCKS ??
+          8192
+      );
+      if (hit) {
+        setCachedStructureCoords(dimensionId, stage.locate, hit, hit.via ?? "scan");
+        logInfo(
+          `structure prefetch scan ${stage.locate}: (${hit.x}, ${hit.y ?? "~"}, ${hit.z})`
+        );
+      }
+    }
+    // locate は Script に座標を返さないため入場時はスキャンのみ。座標はメニュー選択時に survey で取得。
+  }
+
+  system.runTimeout(() => runStructureLocatePrefetch(host, index + 1), 40);
+}
+
+function restorePlayerPosition(player, origin, dimension) {
+  if (!player?.isValid || !origin) return;
+  try {
+    player.teleport(
+      { x: origin.x + 0.5, y: origin.y, z: origin.z + 0.5 },
+      { dimension: dimension ?? player.dimension, keepVelocity: false }
+    );
+  } catch (error) {
+    logWarn(`restore position failed: ${error}`);
+  }
+}
+
+function finishStructureStageLocate(host, stage, dimension, located) {
+  const dimensionId = stage.dimension ?? "overworld";
+  located = sanitizeLocatedCoords(located);
+  if (!located) {
+    failStructureStageLocate(host, stage);
+    return;
+  }
+
+  const cachedEntry = getCachedStructureCoords(dimensionId, stage.locate);
+  const skipProximity =
+    cachedEntry && !structureLocateCacheTrustsProximity(cachedEntry);
+  if (!skipProximity && !isPlausibleStructureLocate(host, located)) {
+    failStructureStageLocate(host, stage);
+    return;
+  }
+
+  if (!cachedEntry || structureLocateCacheTrustsProximity(cachedEntry)) {
+    setCachedStructureCoords(dimensionId, stage.locate, located, "travel");
+  }
+
+  const validation = buildValidationFromLocatedStage(host, stage, dimension, located);
+  if (validation?.ok) {
+    robwPlayerMessage(host, `§a「${stage.label}」へ移動しました。`);
+    logInfo(
+      `stage travel ok: ${stage.locate} -> (${validation.center.x}, ${validation.center.y}, ${validation.center.z})`
+    );
+    return;
+  }
+
+  if (validation?.message) {
+    robwPlayerMessage(host, validation.message);
+  } else {
+    robwPlayerMessage(host, `§c「${stage.label}」へ移動できませんでした。`);
+  }
+}
+
+function runHostedStructureLocateProbe(host, stage, dimension, origin, triggered, onComplete) {
+  if (activeStructureLocateHostIds.has(host.id)) return;
+  activeStructureLocateHostIds.add(host.id);
+
+  const manager = world.tickingAreaManager;
+  const hasTicking = !!manager?.createTickingArea;
+  const points = buildPlayerNearProbePoints(origin, triggered.hintDistance);
+  const waitTicks = Math.max(2, CONFIG.STAGE_LOCATE_PROBE_WAIT_TICKS ?? 10);
+  let index = 0;
+  let cancelled = false;
+  let loggedStructureSample = false;
+
+  const probeMode = structureLocateUsesGeneratedStructuresApi(dimension)
+    ? "api"
+    : "fallback";
+  logInfo(
+    `stage locate probe begin: structure=${stage.locate} points=${points.length} hint=${triggered.hintDistance ?? "none"} ticking=${hasTicking} mode=${probeMode}`
+  );
+
+  const finish = (hit) => {
+    if (cancelled) return;
+    cancelled = true;
+    activeStructureLocateHostIds.delete(host.id);
+    onComplete(hit);
+  };
+
+  const step = () => {
+    if (cancelled || !host?.isValid) {
+      finish(null);
+      return;
+    }
+
+    if (index >= points.length) {
+      logInfo(
+        `stage locate probe done: structure=${stage.locate} tries=${points.length} hit=0`
+      );
+      finish(null);
+      return;
+    }
+
+    const point = points[index++];
+    const cx = Math.floor(point.x / 16);
+    const cz = Math.floor(point.z / 16);
+    const y = getStructureScanY(dimension, point.x, point.z, origin.y) + 1;
+
+    const afterTeleport = () => {
+      system.runTimeout(() => {
+        if (cancelled || !host?.isValid) {
+          finish(null);
+          return;
+        }
+
+        const hit = findStructureAtPlayerColumn(dimension, host, stage.locate, {
+          logSample: !loggedStructureSample,
+          onSample: (structures) => {
+            loggedStructureSample = true;
+            logInfo(
+              `stage locate structure sample: ${structures.map((entry) => String(entry)).join("|")}`
+            );
+          },
+        });
+
+        if (index <= 3 || index % 8 === 0 || hit) {
+          logInfo(
+            `stage locate probe ${index}/${points.length} at (${Math.floor(host.location.x)}, ${Math.floor(host.location.z)}) hit=${hit ? "yes" : "no"}`
+          );
+        }
+
+        if (hit) {
+          const via = hit.via ?? "unknown";
+          logInfo(
+            `structure probe hit ${stage.locate} at (${hit.x}, ${hit.y}, ${hit.z}) try=${index} via=${via}`
+          );
+          logInfo(
+            `player near probe hit ${stage.locate} at (${hit.x}, ${hit.y}, ${hit.z}) try=${index} via=${via}`
+          );
+          finish(hit);
+          return;
+        }
+
+        system.runTimeout(step, 1);
+      }, waitTicks);
+    };
+
+    const teleportToPoint = () => {
+      try {
+        host.teleport(
+          { x: point.x + 0.5, y, z: point.z + 0.5 },
+          { dimension, keepVelocity: false }
+        );
+        afterTeleport();
+      } catch (error) {
+        logWarn(`stage locate probe tp failed: ${error}`);
+        system.runTimeout(step, 1);
+      }
+    };
+
+    if (hasTicking) {
+      loadChunkWithTickingArea(manager, dimension, cx, cz)
+        .then((areaId) => {
+          removeTickingAreaSafe(manager, areaId);
+          teleportToPoint();
+        })
+        .catch((error) => {
+          logWarn(`stage locate preload failed (${cx},${cz}): ${error}`);
+          teleportToPoint();
+        });
+      return;
+    }
+
+    teleportToPoint();
+  };
+
+  system.runTimeout(step, 1);
+}
+
+function locateNearestStructure(dimension, origin, structureId, player) {
+  if (!dimension || !structureId) return null;
+
+  if (player?.isValid) {
+    const triggered = triggerLocateStructureCommand(player, structureId);
+    if (triggered.located) return triggered.located;
+  }
+
+  return findNearestStructureByScan(dimension, origin, structureId);
+}
+
+function buildValidationFromLocatedStage(host, stage, dimension, located) {
+  const bx = Math.floor(located.x);
+  const bz = Math.floor(located.z);
+  const hintY = located.y != null ? clampBlockY(located.y) : 64;
+
+  const chestY = findRoundStartSurfaceY(dimension, bx, bz, hintY);
+  const validation =
+    findNearbyRoundStartValidation(
+      dimension,
+      bx,
+      bz,
+      hintY ?? chestY ?? 64,
+      stage.label
+    ) ??
+    (chestY === null
+      ? null
+      : buildRoundStartValidation(dimension, bx, chestY, bz, stage.label));
+
+  if (!validation?.ok) {
+    if (chestY === null) {
+      return {
+        ok: false,
+        message: `§c「${stage.label}」付近の地面が見つかりませんでした。`,
+        reason: "no_surface",
+      };
+    }
+    return (
+      validation ?? {
+        ok: false,
+        message: "§cステージ地点の足元にブロックがあり、チェストを置けません。",
+        reason: "blocked_feet",
+      }
+    );
+  }
+
+  teleportHostToValidationSpot(host, validation);
+  return validation;
+}
+
+function failStructureStageLocate(host, stage) {
+  activeStructureLocateHostIds.delete(host.id);
+  robwPlayerMessage(
+    host,
+    `§c「${stage.label}」はまだ登録されていません。§7構造物を探す → 移動 → 現在地をステージ登録 の順で登録してください。`
+  );
+}
+
+function continueStructureStageLocateSearch(
+  host,
+  stage,
+  dimension,
+  triggered
+) {
+  let located = triggered.located;
+  if (!located && triggered.lastText) {
+    located = parseCoordsFromText(triggered.lastText);
+  }
+
+  if (located && isPlausibleStructureLocate(host, located)) {
+    logInfo(
+      `stage locate coords: (${located.x}, ${located.y ?? "~"}, ${located.z}) from command`
+    );
+    finishStructureStageLocate(host, stage, dimension, located);
+    return;
+  }
+  located = null;
+
+  if (!triggered.success) {
+    failStructureStageLocate(host, stage);
+    return;
+  }
+
+  robwPlayerMessage(
+    host,
+    `§7「${stage.label}」の座標を特定中...（数十秒かかることがあります）`
+  );
+  logInfo(
+    `stage locate survey begin: structure=${stage.locate} hint=${triggered.hintDistance ?? "none"}`
+  );
+
+  system.runTimeout(() => {
+    if (!host?.isValid) return;
+
+    const located = resolveStructureCoordsForTravel(host, stage, dimension, triggered);
+    if (located) {
+      finishStructureStageLocate(host, stage, dimension, located);
+      return;
+    }
+
+    logInfo(`stage locate survey miss: structure=${stage.locate}`);
+    failStructureStageLocate(host, stage);
+  }, 1);
+}
+
+function beginStructureStageLocateFlow(host, stage) {
+  const dimensionId = stage.dimension ?? "overworld";
+  let dimension;
+  try {
+    dimension = world.getDimension(dimensionId);
+  } catch (error) {
+    logWarn(`stage dimension failed (${dimensionId}): ${error}`);
+    robwPlayerMessage(host, "§cステージ用ディメンションを開けませんでした。");
+    return;
+  }
+
+  if (isPlayerFlying(host)) {
+    robwPlayerMessage(
+      host,
+      "§c飛行中は移動できません。地面に立ってから試してください。"
+    );
+    return;
+  }
+
+  const cached = getCachedStructureCoords(dimensionId, stage.locate, host);
+  if (cached) {
+    logInfo(
+      `stage locate cache hit: ${stage.locate} (${cached.x}, ${cached.y ?? "~"}, ${cached.z}) via=${cached.source ?? "?"}`
+    );
+    finishStructureStageLocate(host, stage, dimension, cached);
+    return;
+  }
+
+  logInfo(`stage travel not registered: ${stage.locate}`);
+  failStructureStageLocate(host, stage);
+}
+
+function findRoundStartSurfaceY(dimension, x, z, hintY = 64) {
+  const bx = Math.floor(x);
+  const bz = Math.floor(z);
+
+  if (typeof dimension.getTopmostBlock === "function") {
+    try {
+      const top = dimension.getTopmostBlock({ x: bx, z: bz });
+      if (top?.isValid && isSolidGroundBlock(top)) {
+        return top.location.y + 1;
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  const startY = clampBlockY(hintY);
+  const probeTop = Math.min(startY + 24, ROBW_WORLD_MAX_Y);
+  for (let y = probeTop; y >= ROBW_WORLD_MIN_Y; y--) {
+    try {
+      const ground = dimension.getBlock({ x: bx, y: y - 1, z: bz });
+      const feet = dimension.getBlock({ x: bx, y, z: bz });
+      if (isSolidGroundBlock(ground) && feet?.isAir) {
+        return y;
+      }
+    } catch {
+      // chunk / boundary
+    }
+  }
+
+  return null;
+}
+
+function buildRoundStartValidation(dimension, bx, chestY, bz, stageLabel) {
+  if (!isPlausibleBlockY(chestY) || !isPlausibleBlockY(chestY - 1)) {
+    return {
+      ok: false,
+      message: "§cステージ地点の高さがワールド範囲外です。別のステージを選んでください。",
+      reason: "out_of_bounds",
+    };
+  }
+
+  const belowY = chestY - 1;
+  let ground;
+  let atFeet;
+  try {
+    ground = dimension.getBlock({ x: bx, y: belowY, z: bz });
+    atFeet = dimension.getBlock({ x: bx, y: chestY, z: bz });
+  } catch {
+    return {
+      ok: false,
+      message: "§cステージ地点のチャンクを読み込めませんでした。",
+      reason: "chunk_unavailable",
+    };
+  }
+  if (!isSolidGroundBlock(ground)) {
+    return {
+      ok: false,
+      message: "§cステージ地点の地面が見つかりません。別のステージを選んでください。",
+      reason: "no_ground",
+    };
+  }
+
+  if (!atFeet?.isAir) {
+    return {
+      ok: false,
+      message: "§cステージ地点の足元にブロックがあり、チェストを置けません。",
+      reason: "blocked_feet",
+    };
+  }
+
+  return {
+    ok: true,
+    center: {
+      x: bx,
+      y: chestY,
+      z: bz,
+      radius: CONFIG.BOX_GATE.radius,
+    },
+    chestSpot: { x: bx, y: chestY, z: bz, footY: belowY },
+    dimension,
+    stageLabel: stageLabel ?? null,
+  };
+}
+
+function findNearbyRoundStartValidation(
+  dimension,
+  centerX,
+  centerZ,
+  hintY,
+  stageLabel,
+  maxRadius = 32
+) {
+  const trySpot = (dx, dz) => {
+    const bx = Math.floor(centerX) + dx;
+    const bz = Math.floor(centerZ) + dz;
+    const chestY = findRoundStartSurfaceY(dimension, bx, bz, hintY);
+    if (chestY === null) return null;
+    const validation = buildRoundStartValidation(
+      dimension,
+      bx,
+      chestY,
+      bz,
+      stageLabel
+    );
+    return validation.ok ? validation : null;
+  };
+
+  const direct = trySpot(0, 0);
+  if (direct) return direct;
+
+  for (let radius = 2; radius <= maxRadius; radius += 2) {
+    for (let dx = -radius; dx <= radius; dx += radius) {
+      for (let dz = -radius; dz <= radius; dz += radius) {
+        if (dx === 0 && dz === 0) continue;
+        if (Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
+        const hit = trySpot(dx, dz);
+        if (hit) {
+          logInfo(
+            `stage start spot offset (${dx}, ${dz}) from structure at (${Math.floor(centerX)}, ${Math.floor(centerZ)})`
+          );
+          return hit;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function teleportHostToValidationSpot(host, validation) {
+  if (!host?.isValid || !validation?.ok) return false;
+
+  const { center, dimension } = validation;
+  try {
+    host.teleport(
+      { x: center.x + 0.5, y: center.y + 0.01, z: center.z + 0.5 },
+      { dimension, keepVelocity: false }
+    );
+    return true;
+  } catch (error) {
+    logWarn(`failed to move host to stage: ${error}`);
+    return false;
+  }
+}
+
+/** @returns {ReturnType<typeof validateRoundStartAtPlayer>} */
+function validateRoundStartAtLocateStage(host, stage) {
+  const structureId = stage?.locate;
+  if (!structureId) {
+    return validateRoundStartAtPlayer(host);
+  }
+
+  const dimensionId = stage.dimension ?? "overworld";
+  let dimension;
+  try {
+    dimension = world.getDimension(dimensionId);
+  } catch (error) {
+    logWarn(`stage dimension failed (${dimensionId}): ${error}`);
+    return {
+      ok: false,
+      message: "§cステージ用ディメンションを開けませんでした。",
+      reason: "bad_dimension",
+    };
+  }
+
+  if (isPlayerFlying(host)) {
+    return {
+      ok: false,
+      message: "§c飛行中はゲートを起動できません。地面に立って start してください。",
+      reason: "flying",
+    };
+  }
+
+  const located = locateNearestStructure(
+    dimension,
+    host.location,
+    structureId,
+    host
+  );
+  if (!located) {
+    return {
+      ok: false,
+      message: `§c「${stage.label}」が見つかりませんでした。`,
+      reason: "locate_failed",
+    };
+  }
+
+  return buildValidationFromLocatedStage(host, stage, dimension, located);
+}
+
+/** @returns {ReturnType<typeof validateRoundStartAtPlayer>} */
+function validateRoundStartForStage(host, stage) {
+  if (!stage?.locate) {
+    return validateRoundStartAtPlayer(host);
+  }
+  return validateRoundStartAtLocateStage(host, stage);
+}
+
+/** @returns {ReturnType<typeof validateRoundStartAtPlayer>} */
 function validateRoundStartAtPlayer(player) {
   const loc = player.location;
   const dimension = player.dimension;
@@ -1751,6 +3880,7 @@ function validateRoundStartAtPlayer(player) {
     center,
     chestSpot: { x: bx, y: chestY, z: bz, footY: belowY },
     dimension,
+    stageLabel: null,
   };
 }
 
@@ -1767,11 +3897,11 @@ function isSolidGroundBlock(block) {
 
 function setBlockTypeAt(dimension, location, typeId) {
   const block = dimension.getBlock(location);
-  if (block?.setType) {
+  if (typeof block?.setType === "function") {
     block.setType(typeId);
     return;
   }
-  if (dimension.setBlockType) {
+  if (typeof dimension.setBlockType === "function") {
     dimension.setBlockType(location, typeId);
   }
 }
@@ -1951,6 +4081,10 @@ function isPenaltyAnimalEntity(entity) {
 }
 
 function findNearestProtectableAnimal(player) {
+  if (box100.isBox100Mode()) {
+    return box100.findNearestBox100Wolf(player, CONFIG.PROTECTION_RADIUS ?? 8);
+  }
+
   const { location, dimension } = player;
   const entities = dimension.getEntities({
     location,
@@ -2036,7 +4170,14 @@ function tryProtectHakoinu(player, preferredTarget) {
 
   const entityId = target.id;
   const entityType = target.typeId;
-  const kind = CONFIG.HAKOINU_ENTITY_TYPES.includes(entityType) ? "hakoinu" : "wrong";
+  if (box100.isBox100Mode() && !CONFIG.HAKOINU_ENTITY_TYPES.includes(entityType)) {
+    robwPlayerMessage(player, "§7このモードではオオカミだけ捕獲できます。");
+    return;
+  }
+
+  const kind = CONFIG.HAKOINU_ENTITY_TYPES.includes(entityType)
+    ? "hakoinu"
+    : "wrong";
 
   if (boneCost > 0) {
     const consumed = consumeItemFromInventory(player, CONFIG.PROTECT_ITEM, boneCost);
@@ -2051,13 +4192,19 @@ function tryProtectHakoinu(player, preferredTarget) {
   target.remove();
 
   giveReturnBox(player, 1, kind);
-  const chest = getActiveSubmissionChestPos();
-  robwPlayerMessage(
-    player,
-    `§a毛皮を手に入れた！ §7${CONFIG.RETURN_BOX_DISPLAY_NAME} を納品チェスト (${chest.x}, ${chest.y}, ${chest.z}) に入れてください。`,
-  );
+  if (box100.isBox100Mode()) {
+    robwPlayerMessage(player, box100.getBox100CaptureHint(player));
+  } else {
+    const chest = getActiveSubmissionChestPos();
+    robwPlayerMessage(
+      player,
+      `§a毛皮を手に入れた！ §7${CONFIG.RETURN_BOX_DISPLAY_NAME} を納品チェスト (${chest.x}, ${chest.y}, ${chest.z}) に入れてください。`
+    );
+  }
   logInfo(`${kind} captured by ${player.name} (entity ${entityId}, ${entityType})`);
-  spawnAfterCapture(player);
+  if (!box100.isBox100Mode()) {
+    spawnAfterCapture(player);
+  }
 }
 
 function resolveKillAttributionPlayer(damageSource) {
@@ -2082,6 +4229,7 @@ function resolveKillAttributionPlayer(damageSource) {
 function isRoundSpawnedHakoinuEntity(entityId, typeId) {
   if (!entityId || !CONFIG.HAKOINU_ENTITY_TYPES.includes(typeId)) return false;
   if (scriptRemovedRoundEntityIds.has(entityId)) return false;
+  if (box100.isBox100Mode() && box100.isBox100WolfEntity(entityId)) return true;
   return spawnedRoundEntityIds.includes(entityId);
 }
 
@@ -2095,7 +4243,7 @@ function applyHakoinuCombatPenalty(player, points, message) {
 }
 
 function handleHakoinuRoundHurt(hurtEntity, damageSource) {
-  if (gameState !== "running") return;
+  if (gameState !== "running" || !box100.shouldApplyHakoinuCombatPenalties()) return;
 
   let entityId;
   let typeId;
@@ -2119,7 +4267,7 @@ function handleHakoinuRoundHurt(hurtEntity, damageSource) {
 }
 
 function handleHakoinuRoundDeath(deadEntity, damageSource) {
-  if (gameState !== "running") return;
+  if (gameState !== "running" || !box100.shouldApplyHakoinuCombatPenalties()) return;
 
   let entityId;
   let typeId;
@@ -2167,14 +4315,36 @@ function formatPointsDelta(points) {
   return "§70pt";
 }
 
-function isSubmissionChestBlock(block) {
-  if (!block?.isValid) return false;
-  const chest = getActiveSubmissionChestPos();
+function isActiveSubmissionChestBlock(block) {
+  if (!block?.isValid || !activeSubmissionChestPos) return false;
+  const chest = activeSubmissionChestPos;
   const loc = block.location;
-  if (loc.x !== chest.x || loc.y !== chest.y || loc.z !== chest.z) {
+  if (
+    Math.floor(loc.x) !== chest.x ||
+    Math.floor(loc.y) !== chest.y ||
+    Math.floor(loc.z) !== chest.z
+  ) {
     return false;
   }
-  return block.typeId === "minecraft:chest";
+  return isSubmissionChestBlockType(block.typeId);
+}
+
+/** @deprecated 互換エイリアス */
+function isSubmissionChestBlock(block) {
+  return isActiveSubmissionChestBlock(block);
+}
+
+function isRoundBlockBreakProtectionActive() {
+  return gameState === "running" || gameState === "closing";
+}
+
+function shouldCancelProtectedBlockBreak(block) {
+  if (!block?.isValid || !isRoundBlockBreakProtectionActive()) return false;
+  if (box100.isBox100Mode()) {
+    return box100.shouldCancelBox100BlockBreak(block);
+  }
+  if (CONFIG.PROTECT_SUBMISSION_CHEST === false) return false;
+  return isActiveSubmissionChestBlock(block);
 }
 
 function getSubmissionChestContainer() {
@@ -2232,7 +4402,7 @@ function hasCaptureItemsInContainer(container) {
   return counts.hakoinu > 0 || counts.wrong > 0 || counts.unified > 0;
 }
 
-/** 納品チェストで吸収・減点しない（操作時計・骨） */
+/** 納品チェストで吸収・減点しない（操作アイテム・骨） */
 function isChestPreservedItem(itemStack) {
   if (!itemStack) return false;
   return isRobwWandItemType(itemStack.typeId) || itemStack.typeId === CONFIG.PROTECT_ITEM;
@@ -2425,10 +4595,10 @@ function buildRankingLines() {
 }
 
 function showRanking(title = "§6Return of BoxWorld 帰還ランキング") {
-  broadcast(title, { priority: "high" });
-  for (const line of buildRankingLines()) {
-    broadcast(`§e${line}`, { priority: "high" });
-  }
+  robwBroadcastSequence(
+    [title, ...buildRankingLines().map((line) => `§e${line}`)],
+    { priority: "high" }
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2917,24 +5087,53 @@ function setPlayerRoundSpawnPoint(player, center, dimension) {
   }
 }
 
-function rememberPlayerSpawnPointsBeforeRound() {
-  savedPlayerSpawnBeforeRound.clear();
+function rememberPlayerPreRoundState() {
+  savedPlayerPreRoundState.clear();
   for (const player of world.getPlayers()) {
     if (!player?.isValid) continue;
     try {
-      const spawn = typeof player.getSpawnPoint === "function" ? player.getSpawnPoint() : undefined;
-      savedPlayerSpawnBeforeRound.set(player.id, spawn);
-    } catch {
-      savedPlayerSpawnBeforeRound.set(player.id, undefined);
+      const { location } = player;
+      const dimensionId = player.dimension?.id ?? "minecraft:overworld";
+      const spawn =
+        typeof player.getSpawnPoint === "function"
+          ? player.getSpawnPoint()
+          : undefined;
+      savedPlayerPreRoundState.set(player.id, {
+        location: { x: location.x, y: location.y, z: location.z },
+        dimensionId,
+        spawn,
+      });
+    } catch (error) {
+      logWarn(`remember pre-round state failed for ${player.name}: ${error}`);
+    }
+  }
+}
+
+function clearSavedPlayerPreRoundState() {
+  savedPlayerPreRoundState.clear();
+}
+
+function restorePlayersToPreRoundLocations() {
+  for (const player of world.getPlayers()) {
+    if (!player?.isValid) continue;
+    const saved = savedPlayerPreRoundState.get(player.id);
+    if (!saved) continue;
+    try {
+      const dimension = world.getDimension(saved.dimensionId);
+      player.teleport(saved.location, { dimension, keepVelocity: false });
+      robwPlayerMessage(player, "§7もとの場所に戻しました。");
+    } catch (error) {
+      logWarn(`restore location failed for ${player.name}: ${error}`);
     }
   }
 }
 
 function restorePlayerSpawnPointsAfterRound() {
+  restorePlayersToPreRoundLocations();
   for (const player of world.getPlayers()) {
     if (!player?.isValid) continue;
-    if (!savedPlayerSpawnBeforeRound.has(player.id)) continue;
-    const spawn = savedPlayerSpawnBeforeRound.get(player.id);
+    if (!savedPlayerPreRoundState.has(player.id)) continue;
+    const spawn = savedPlayerPreRoundState.get(player.id)?.spawn;
     try {
       if (typeof player.setSpawnPoint === "function") {
         player.setSpawnPoint(spawn);
@@ -2943,7 +5142,7 @@ function restorePlayerSpawnPointsAfterRound() {
       logWarn(`restore spawn failed for ${player.name}: ${error}`);
     }
   }
-  savedPlayerSpawnBeforeRound.clear();
+  savedPlayerPreRoundState.clear();
 }
 
 function enableRoundImmediateRespawn() {
@@ -3105,7 +5304,38 @@ function handlePlayerRoundRespawn(player) {
   }, 5);
 }
 
+function beginGameRoundBox100(host) {
+  gameState = "running";
+  const startedMs = Date.now();
+  gameEndWallMs = startedMs + box100.getBox100TimeLimitMs();
+  nextTimeNotifyWallMs = startedMs + TIME_NOTIFY_INTERVAL_MS;
+
+  box100.beginBox100Running(host);
+
+  enableRoundImmediateRespawn();
+
+  gameLoopId = system.runInterval(tickGameTimer, TICKS_PER_SECOND);
+  startRemainingTimeHudLoop();
+  submissionLoopId = system.runInterval(() => {
+    if (gameState !== "running" || !box100.isBox100Mode()) return;
+    if (lastSubmissionPlayer?.isValid) {
+      if (system.currentTick - lastSubmissionTick <= SUBMISSION_CREDIT_WINDOW_TICKS) {
+        box100.processBox100ShulkerDeliveries();
+      }
+    }
+    box100.processBox100ShulkerDeliveries();
+  }, TICKS_PER_SECOND);
+
+  robwPlayerMessage(host, "§a[ROBW] ハコイヌ100匹チャレンジを開始しました！");
+  logInfo(`box100 game started by ${host.name}`);
+}
+
 function beginGameRound(host, validation) {
+  if (box100.isBox100Mode()) {
+    beginGameRoundBox100(host);
+    return;
+  }
+
   gameState = "running";
   const startedMs = Date.now();
   gameEndWallMs = startedMs + GATE_OPEN_MS;
@@ -3118,6 +5348,9 @@ function beginGameRound(host, validation) {
     `§7攻撃 ${CONFIG.POINTS_HAKOINU_HIT}pt/回 倒す ${CONFIG.POINTS_HAKOINU_KILL}pt 別種納品 ${CONFIG.POINTS_WRONG_ANIMAL}pt §7| 開始: ${host.name} (${validation.center.x}, ${validation.center.y}, ${validation.center.z})`,
     { priority: "high" },
   );
+  if (validation.stageLabel) {
+    broadcast(`§7ステージ: §f${validation.stageLabel}`, { priority: "high" });
+  }
 
   if (!prepareRoundStart(validation)) {
     gameState = "waiting";
@@ -3135,7 +5368,6 @@ function beginGameRound(host, validation) {
     return;
   }
 
-  rememberPlayerSpawnPointsBeforeRound();
   enableRoundImmediateRespawn();
   gatherAllPlayersToRoundStart(validation);
 
@@ -3159,47 +5391,39 @@ function beginGameRound(host, validation) {
   );
 }
 
-function startGame(initiator) {
+function assertStartGameAllowed(initiator) {
   if (initiator && !requireSessionHost(initiator, "ゲートの起動")) {
-    return;
+    return false;
   }
 
   if (gameState === "running") {
     const msg = `§cすでにゲート開放中です。${CONFIG.CHAT_PREFIX} stop で閉鎖できます。`;
     broadcast(msg);
-    robwPlayerMessage(initiator, msg);
+    if (initiator) robwPlayerMessage(initiator, msg);
     logWarn("Start command ignored because game is already running");
-    return;
+    return false;
   }
 
   if (gameState === "countdown") {
     const msg = "§cカウントダウン中です。しばらくお待ちください。";
-    robwPlayerMessage(initiator, msg);
-    return;
+    if (initiator) robwPlayerMessage(initiator, msg);
+    return false;
   }
 
   if (gameState === "closing") {
     const msg = "§c閉鎖演出中です。しばらくお待ちください。";
-    robwPlayerMessage(initiator, msg);
-    return;
+    if (initiator) robwPlayerMessage(initiator, msg);
+    return false;
   }
 
-  const host = resolveStartHost(initiator);
-  if (!host) {
-    broadcast("§cプレイヤーがいないためゲートを起動できません。");
-    return;
-  }
+  return true;
+}
 
-  const validation = validateRoundStartAtPlayer(host);
-  if (!validation.ok) {
-    robwPlayerMessage(host, validation.message);
-    logWarn(`start blocked for ${host.name}: ${validation.reason}`);
-    return;
-  }
-
+function continueStartGame(host, validation) {
   stopGameLoops();
   resetAllScores();
   resetTimerState();
+  rememberPlayerPreRoundState();
   activeRoundCenter = validation.center;
   activeRoundDimension = validation.dimension;
   applyDaytimeLock();
@@ -3207,6 +5431,276 @@ function startGame(initiator) {
   runStartCountdown(host, validation, () => {
     beginGameRound(host, validation);
   });
+}
+
+function continueStartGameBox100(host, validation) {
+  stopGameLoops();
+  resetAllScores();
+  resetTimerState();
+  rememberPlayerPreRoundState();
+  activeRoundCenter = validation.center;
+  activeRoundDimension = validation.dimension;
+  applyDaytimeLock();
+
+  const prepared = box100.prepareBox100Arena(host, validation.dimension);
+  if (!prepared.ok) {
+    box100.resetBox100State();
+    clearSavedPlayerPreRoundState();
+    robwPlayerMessage(host, prepared.message ?? "§c部屋の準備に失敗しました。");
+    logWarn(`box100 prepare failed: ${prepared.message ?? "unknown"}`);
+    return;
+  }
+
+  runStartCountdown(host, validation, () => {
+    beginGameRound(host, validation);
+  });
+}
+
+function runManualLocateForStage(initiator, menuIndex) {
+  if (initiator && !requireSessionHost(initiator, "構造物へ移動")) return;
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないため移動できません。");
+    return;
+  }
+
+  const stage = getRoundStageTravelStages()[menuIndex];
+  if (!stage) {
+    robwPlayerMessage(host, "§c構造物が見つかりません。");
+    return;
+  }
+
+  beginStructureStageLocateFlow(host, stage);
+}
+
+function runStructureFindShortcutForStage(initiator, menuIndex) {
+  if (initiator && !requireSessionHost(initiator, "構造物を探す")) return;
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないため locate できません。");
+    return;
+  }
+
+  const stage = getStructureLocateShortcutStages()[menuIndex];
+  if (!stage?.locate) {
+    robwPlayerMessage(host, "§c構造物が見つかりません。");
+    return;
+  }
+
+  system.run(() => {
+    if (!host?.isValid) return;
+    showStructureLocateManualGuide(host, stage);
+  });
+}
+
+function runStructureRegisterForStage(initiator, menuIndex) {
+  if (initiator && !requireSessionHost(initiator, "ステージ登録")) return;
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないため登録できません。");
+    return;
+  }
+
+  const stage = getStructureLocateShortcutStages()[menuIndex];
+  if (!stage?.locate) {
+    robwPlayerMessage(host, "§c構造物が見つかりません。");
+    return;
+  }
+
+  system.run(() => registerStructureStageFromCurrentLocation(host, stage));
+}
+
+function openStructureTravelMenu(initiator) {
+  if (initiator && !requireSessionHost(initiator, "構造物へ移動")) return;
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないため移動できません。");
+    return;
+  }
+
+  const entries = getRoundStageTravelMenuEntries();
+  if (entries.length <= 0) {
+    robwPlayerMessage(host, "§c移動できる構造物がありません。");
+    return;
+  }
+
+  const showForm = globalThis.robwShowStageSelectMenu;
+  if (typeof showForm === "function") {
+    showForm(
+      host,
+      entries,
+      (player, stageIndex) => {
+        runManualLocateForStage(player, stageIndex);
+      },
+      {
+        title: "構造物へ移動",
+        body:
+          "登録済みの構造物へテレポートします。\n未登録の場合は「構造物を探す」→移動→「現在地をステージ登録」を行ってください。",
+      }
+    );
+    return;
+  }
+
+  runManualLocateForStage(host, 0);
+}
+
+function openStructureFindMenu(initiator) {
+  if (initiator && !requireSessionHost(initiator, "構造物を探す")) return;
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないため locate できません。");
+    return;
+  }
+
+  const entries = getStructureFindMenuEntries();
+  if (entries.length <= 0) {
+    robwPlayerMessage(host, "§c locate ショートカット用の構造物がありません。");
+    return;
+  }
+
+  const showForm = globalThis.robwShowStageSelectMenu;
+  if (typeof showForm === "function") {
+    showForm(
+      host,
+      entries,
+      (player, stageIndex) => {
+        runStructureFindShortcutForStage(player, stageIndex);
+      },
+      {
+        title: "構造物を探す",
+        body:
+          "選んだ構造物の /locate コマンドを案内します。\nチャットで手動実行 → 座標へ移動 →「現在地をステージ登録」。",
+      }
+    );
+    return;
+  }
+
+  runStructureFindShortcutForStage(host, 0);
+}
+
+function openStructureRegisterMenu(initiator) {
+  if (initiator && !requireSessionHost(initiator, "ステージ登録")) return;
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないため登録できません。");
+    return;
+  }
+
+  const entries = getStructureRegisterMenuEntries();
+  if (entries.length <= 0) {
+    robwPlayerMessage(host, "§c登録できる構造物がありません。");
+    return;
+  }
+
+  const showForm = globalThis.robwShowStageSelectMenu;
+  if (typeof showForm === "function") {
+    showForm(
+      host,
+      entries,
+      (player, stageIndex) => {
+        runStructureRegisterForStage(player, stageIndex);
+      },
+      {
+        title: "現在地をステージ登録",
+        body: "立っている場所を、選んだ構造物の移動先として保存します。",
+      }
+    );
+    return;
+  }
+
+  runStructureRegisterForStage(host, 0);
+}
+
+/** @deprecated 互換: travel メニューへ */
+function openLocateStructureMenu(initiator) {
+  openStructureTravelMenu(initiator);
+}
+
+function beginStartGameNormal(initiator) {
+  if (!assertStartGameAllowed(initiator)) return;
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないためゲートを起動できません。");
+    return;
+  }
+
+  system.run(() => {
+    if (!host?.isValid) return;
+    if (!assertStartGameAllowed(host)) return;
+
+    const validation = validateRoundStartAtPlayer(host);
+    if (!validation.ok) {
+      robwPlayerMessage(host, validation.message);
+      logWarn(`start blocked for ${host.name}: ${validation.reason}`);
+      return;
+    }
+
+    continueStartGame(host, validation);
+  });
+}
+
+function beginStartGameBox100(initiator) {
+  if (!assertStartGameAllowed(initiator)) return;
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないためゲートを起動できません。");
+    return;
+  }
+
+  system.run(() => {
+    if (!host?.isValid) return;
+    if (!assertStartGameAllowed(host)) return;
+
+    if (isPlayerFlying(host)) {
+      robwPlayerMessage(host, "§c飛行中は開始できません。地面に立ってから試してください。");
+      return;
+    }
+
+    const validation = validateRoundStartAtPlayer(host);
+    if (!validation.ok) {
+      robwPlayerMessage(host, validation.message);
+      logWarn(`box100 start blocked for ${host.name}: ${validation.reason}`);
+      return;
+    }
+
+    continueStartGameBox100(host, validation);
+  });
+}
+
+function openStartModeMenu(initiator) {
+  if (initiator && !requireSessionHost(initiator, "ゲートの起動")) return;
+
+  const host = resolveStartHost(initiator);
+  if (!host) {
+    broadcast("§cプレイヤーがいないためゲートを起動できません。");
+    return;
+  }
+
+  const showForm = globalThis.robwShowStartModeMenu;
+  if (typeof showForm === "function") {
+    showForm(host, (player, modeId) => {
+      if (modeId === box100.BOX100_MODE_ID) {
+        beginStartGameBox100(player);
+      } else {
+        beginStartGameNormal(player);
+      }
+    });
+    return;
+  }
+
+  beginStartGameNormal(host);
+}
+
+function beginStartGame(initiator) {
+  openStartModeMenu(initiator);
 }
 
 function stopGame() {
@@ -3229,27 +5723,9 @@ function stopGame() {
 }
 
 function resetGame() {
-  cancelStartCountdown();
-  cancelEndCountdown();
-  clearPendingRoundDeathRespawns();
-  restoreRoundRespawnSettings();
-  stopGameLoops();
-  clearRemainingTimeHud();
-  gameState = "waiting";
-  resetTimerState();
-  resetAllScores();
-  clearAllReturnBoxLedgers();
-  const center = activeRoundCenter;
-  const players = world.getPlayers();
-  const dimension = players.length > 0 ? players[0].dimension : undefined;
-  clearSpawnedHakoinu(center, dimension);
-  activeRoundCenter = null;
-  activeRoundDimension = null;
-  if (players.length > 0) {
-    removePlacedSubmissionChest(players[0].dimension);
-  }
-  resetAllPlayersToLobbyInventory();
-  broadcast(`§eリセット完了。${CONFIG.CHAT_PREFIX} start でゲートを起動できます。`);
+  performFullGameReset({
+    announceMessage: `§eリセット完了。${CONFIG.CHAT_PREFIX} start でゲートを起動できます。`,
+  });
   logInfo("Game reset");
 }
 
@@ -3261,10 +5737,85 @@ function normalizeChatMessage(message) {
   return message.trim().replace(/！/g, "!");
 }
 
-function runRobwSubcommand(sub, player) {
+function runRobwSubcommand(sub, player, extraArgs = []) {
   switch (sub) {
     case "start":
-      startGame(player);
+      if (extraArgs.length > 0) {
+        const modeArg = extraArgs[0].toLowerCase();
+        if (modeArg === box100.BOX100_MODE_ID || modeArg === "box100") {
+          beginStartGameBox100(player);
+          break;
+        }
+        if (modeArg === "normal" || modeArg === "classic") {
+          beginStartGameNormal(player);
+          break;
+        }
+        if (player) {
+          robwPlayerMessage(
+            player,
+            `§7開始: §f!robw start §7(メニュー) / §f!robw start box100 §7/ §f!robw start normal`
+          );
+        }
+        break;
+      }
+      beginStartGame(player);
+      break;
+    case "find":
+      if (extraArgs.length > 0) {
+        const findIndex = getStructureLocateShortcutStages().findIndex(
+          (stage) => stage.id === extraArgs.join("_")
+        );
+        if (findIndex < 0) {
+          if (player) {
+            robwPlayerMessage(
+              player,
+              `§c不明な構造物: ${extraArgs.join(" ")} §7(メニューから選んでください)`
+            );
+          }
+          break;
+        }
+        runStructureFindShortcutForStage(player, findIndex);
+        break;
+      }
+      openStructureFindMenu(player);
+      break;
+    case "register":
+      if (extraArgs.length > 0) {
+        const regIndex = getStructureLocateShortcutStages().findIndex(
+          (stage) => stage.id === extraArgs.join("_")
+        );
+        if (regIndex < 0) {
+          if (player) {
+            robwPlayerMessage(
+              player,
+              `§c不明な構造物: ${extraArgs.join(" ")} §7(メニューから選んでください)`
+            );
+          }
+          break;
+        }
+        runStructureRegisterForStage(player, regIndex);
+        break;
+      }
+      openStructureRegisterMenu(player);
+      break;
+    case "locate":
+    case "travel":
+    case "stage":
+      if (extraArgs.length > 0) {
+        const locateIndex = findRoundStageTravelIndexById(extraArgs.join("_"));
+        if (locateIndex < 0) {
+          if (player) {
+            robwPlayerMessage(
+              player,
+              `§c不明な構造物: ${extraArgs.join(" ")} §7(メニューから選ぶか id を指定)`
+            );
+          }
+          break;
+        }
+        runManualLocateForStage(player, locateIndex);
+        break;
+      }
+      openStructureTravelMenu(player);
       break;
     case "stop":
       if (player && !requireSessionHost(player, "ゲートの閉鎖")) break;
@@ -3279,7 +5830,9 @@ function runRobwSubcommand(sub, player) {
       break;
     default:
       if (player) {
-        robwPlayerMessage(player, `§7使用法: ${CONFIG.CHAT_PREFIX} start | stop | reset | ranking`);
+        robwPlayerMessage(player,
+          `§7使用法: ${CONFIG.CHAT_PREFIX} start | locate | find | register | stop | reset | ranking`
+        );
       }
       break;
   }
@@ -3303,7 +5856,9 @@ function handleChatCommand(player, message) {
   const parts = normalized.split(/\s+/).filter(Boolean);
   if (parts.length < 2 || parts[0].toLowerCase() !== "!robw") return false;
 
-  runRobwSubcommand(parts[1].toLowerCase(), player);
+  const sub = parts[1].toLowerCase();
+  const extraArgs = parts.slice(2);
+  runRobwSubcommand(sub, player, extraArgs);
   return true;
 }
 
@@ -3312,7 +5867,112 @@ function stripFormatting(text) {
 }
 
 function isRobwWandItemType(typeId) {
-  return typeId === CONFIG.WAND_ITEM || typeId === CONFIG.WAND_ITEM_CUSTOM;
+  return typeId === CONFIG.WAND_ITEM_CUSTOM || typeId === CONFIG.WAND_ITEM;
+}
+
+function isRobwLegacyClockItem(item) {
+  if (!item || item.typeId !== CONFIG.WAND_ITEM) return false;
+  const name = stripFormatting(item.nameTag ?? "");
+  if (!name || name === CONFIG.WAND_MENU_NAME) return true;
+  if (name.toLowerCase().startsWith("robw")) return true;
+  for (const legacy of CONFIG.WAND_LEGACY_MENU_NAMES ?? []) {
+    if (name.toLowerCase() === legacy.toLowerCase()) return true;
+  }
+  for (const wandName of Object.keys(CONFIG.WAND_NAMES ?? {})) {
+    if (name.toLowerCase() === wandName.toLowerCase()) return true;
+  }
+  return false;
+}
+
+function removeLegacyRobwClocksFromPlayer(player) {
+  const container = player.getComponent("inventory")?.container;
+  if (!container) return 0;
+
+  let removed = 0;
+  for (let slot = 0; slot < container.size; slot++) {
+    const item = container.getItem(slot);
+    if (!item || !isRobwLegacyClockItem(item)) continue;
+    container.setItem(slot, undefined);
+    removed += 1;
+  }
+  if (removed > 0) {
+    logInfo(`removed ${removed} legacy clock(s) from ${player.name}`);
+  }
+  return removed;
+}
+
+function getWandControlHotbarSlot() {
+  const slot = CONFIG.WAND_CONTROL_HOTBAR_SLOT ?? 0;
+  return Math.min(8, Math.max(0, Math.floor(slot)));
+}
+
+/** 操作アイテムをホットバー左端へ固定 @returns {boolean} */
+function placeRobwControlInHotbar(player, stack) {
+  const container = player.getComponent("inventory")?.container;
+  if (!container || !stack) return false;
+
+  const targetSlot = getWandControlHotbarSlot();
+  const existing = container.getItem(targetSlot);
+  if (
+    existing?.typeId === CONFIG.WAND_ITEM_CUSTOM &&
+    stripFormatting(existing.nameTag ?? "") === CONFIG.WAND_MENU_NAME
+  ) {
+    return true;
+  }
+
+  if (existing) {
+    const leftover = container.addItem(existing);
+    if (leftover) {
+      player.dimension.spawnItem(leftover, player.location);
+    }
+  }
+
+  container.setItem(targetSlot, stack);
+
+  const inventory = player.getComponent("inventory");
+  if (inventory && typeof inventory.selectedSlot === "number") {
+    try {
+      inventory.selectedSlot = targetSlot;
+    } catch {
+      // ignore
+    }
+  }
+  return true;
+}
+
+/** 重複した robw:control を1個にし、左端スロットへ @returns {number} 除去した個数 */
+function dedupeRobwControlItems(player) {
+  const container = player.getComponent("inventory")?.container;
+  if (!container) return 0;
+
+  const targetSlot = getWandControlHotbarSlot();
+  let keeper;
+  let extra = 0;
+
+  for (let slot = 0; slot < container.size; slot++) {
+    const item = container.getItem(slot);
+    if (item?.typeId !== CONFIG.WAND_ITEM_CUSTOM) continue;
+    if (!keeper) {
+      keeper = item;
+      if (slot !== targetSlot) {
+        container.setItem(slot, undefined);
+      }
+      continue;
+    }
+    container.setItem(slot, undefined);
+    extra += 1;
+  }
+
+  if (keeper) {
+    const stack = new ItemStack(CONFIG.WAND_ITEM_CUSTOM, 1);
+    stack.nameTag = keeper.nameTag ?? CONFIG.WAND_MENU_NAME;
+    placeRobwControlInHotbar(player, stack);
+  }
+
+  if (extra > 0) {
+    logInfo(`deduped ${extra} extra ${CONFIG.WAND_ITEM_CUSTOM} from ${player.name}`);
+  }
+  return extra;
 }
 
 function resolveWandSubcommand(itemStack) {
@@ -3367,23 +6027,32 @@ function getRobwMenuStatePlain() {
 
 function onRobwMenuSelected(player, sub) {
   runRobwSubcommand(sub, player);
-  if (sub !== "ranking") {
+  if (
+    sub !== "ranking" &&
+    sub !== "locate" &&
+    sub !== "travel" &&
+    sub !== "find" &&
+    sub !== "register"
+  ) {
     robwPlayerMessage(player, `§7[ROBW] ${sub} を実行しました`);
   }
 }
 
 function openRobwControlMenuChat(player) {
   const state = getRobwMenuStatePlain();
-  robwPlayerMessage(player, "§6§l--- Return of BoxWorld ---");
-  robwPlayerMessage(player, `§7状態: ${state}`);
-  robwPlayerMessage(player, "§e操作 (チート ON で入力):");
-  robwPlayerMessage(player, "§f/scriptevent robw:menu run §7- この一覧");
-  robwPlayerMessage(player, "§f/scriptevent robw:start run §7- ゲート起動");
-  robwPlayerMessage(player, "§f/scriptevent robw:stop run §7- ゲート閉鎖");
-  robwPlayerMessage(player, "§f/scriptevent robw:reset run §7- リセット");
-  robwPlayerMessage(player, "§f/scriptevent robw:ranking run §7- ランキング");
-  robwPlayerMessage(player, "§7(パック適用済みなら) §f/function robw/start §7なども可");
-  robwPlayerMessage(player, `§7または §f${CONFIG.CHAT_PREFIX} start §7(Beta API 要)`);
+  robwPlayerMessage(player,"§6§l--- Return of BoxWorld ---");
+  robwPlayerMessage(player,`§7状態: ${state}`);
+  robwPlayerMessage(player,"§e操作 (チート ON で入力):");
+  robwPlayerMessage(player,"§f/scriptevent robw:menu run §7- この一覧");
+  robwPlayerMessage(player,"§f/scriptevent robw:start run §7- ゲート起動（足元）");
+  robwPlayerMessage(player,"§f/scriptevent robw:locate run §7- 構造物へ移動");
+  robwPlayerMessage(player,"§f/scriptevent robw:find run §7- 構造物を探す (/locate 案内)");
+  robwPlayerMessage(player,"§f/scriptevent robw:register run §7- 現在地をステージ登録");
+  robwPlayerMessage(player,"§f/scriptevent robw:stop run §7- ゲート閉鎖");
+  robwPlayerMessage(player,"§f/scriptevent robw:reset run §7- リセット");
+  robwPlayerMessage(player,"§f/scriptevent robw:ranking run §7- ランキング");
+  robwPlayerMessage(player,"§7(パック適用済みなら) §f/function robw/start §7なども可");
+  robwPlayerMessage(player,`§7または §f${CONFIG.CHAT_PREFIX} start §7(Beta API 要)`);
 }
 
 function openRobwControlMenu(player) {
@@ -3414,7 +6083,7 @@ function tryOpenRobwMenuFromWand(player, itemStack) {
   if (!held || !isRobwWandItemType(held.typeId)) return false;
 
   if (!isSessionHost(player)) {
-    robwPlayerMessage(player, "§c操作時計はホストだけが使えます。");
+    robwPlayerMessage(player, "§c操作アイテムはホストだけが使えます。");
     return true;
   }
 
@@ -3426,7 +6095,7 @@ function tryOpenRobwMenuFromWand(player, itemStack) {
     return true;
   }
 
-  robwPlayerMessage(player, "§7[ROBW] 操作時計を使用中...");
+  robwPlayerMessage(player, "§7[ROBW] 操作アイテムを使用中...");
   runRobwSubcommand(sub, player);
   robwPlayerMessage(player, `§7[ROBW] ${sub} を実行しました`);
   return true;
@@ -3457,13 +6126,7 @@ function playerHasStarterWand(player) {
 
   for (let slot = 0; slot < container.size; slot++) {
     const item = container.getItem(slot);
-    if (!item) continue;
-    if (item.typeId === CONFIG.WAND_ITEM_CUSTOM) return true;
-    if (item.typeId !== CONFIG.WAND_ITEM) continue;
-    const name = stripFormatting(item.nameTag ?? "");
-    if (!name || name === CONFIG.WAND_MENU_NAME || name.toLowerCase().startsWith("robw")) {
-      return true;
-    }
+    if (item?.typeId === CONFIG.WAND_ITEM_CUSTOM) return true;
   }
   return false;
 }
@@ -3510,18 +6173,6 @@ function addItemStackToPlayer(player, stack) {
   return true;
 }
 
-function tryGiveCustomControlItem(player) {
-  try {
-    const stack = new ItemStack(CONFIG.WAND_ITEM_CUSTOM, 1);
-    stack.nameTag = CONFIG.WAND_MENU_NAME;
-    addItemStackToPlayer(player, stack);
-    logInfo(`bonus ${CONFIG.WAND_ITEM_CUSTOM} given to ${player.name}`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * @param {import("@minecraft/server").Player} player
  * @param {{ notifyIfOwned?: boolean }} [options]
@@ -3539,37 +6190,44 @@ function giveStarterWand(player, options) {
 
   if (!isSessionHost(player)) {
     removeRobwWandsFromPlayer(player);
+    removeLegacyRobwClocksFromPlayer(player);
     if (notifyIfOwned) {
-      robwPlayerMessage(player, "§c操作時計はホストだけが持てます。");
+      robwPlayerMessage(player, "§c操作アイテムはホストだけが持てます。");
     }
     return;
   }
 
   try {
-    normalizeRobwWandNameTags(player);
+    removeLegacyRobwClocksFromPlayer(player);
+    dedupeRobwControlItems(player);
 
     if (playerHasStarterWand(player)) {
+      dedupeRobwControlItems(player);
       if (notifyIfOwned) {
-        robwPlayerMessage(player, "§7[ROBW] 操作時計は既に持っています");
+        robwPlayerMessage(player, "§7[ROBW] 操作アイテムは既に持っています");
       }
       return;
     }
 
-    const stack = new ItemStack(CONFIG.WAND_ITEM, 1);
+    const stack = new ItemStack(CONFIG.WAND_ITEM_CUSTOM, 1);
     stack.nameTag = CONFIG.WAND_MENU_NAME;
-    addItemStackToPlayer(player, stack);
+    if (!placeRobwControlInHotbar(player, stack)) {
+      addItemStackToPlayer(player, stack);
+      dedupeRobwControlItems(player);
+    }
 
     robwPlayerMessage(
       player,
-      "§a[ROBW] 操作時計を渡しました。§fブロック右クリック§aでメニュー(start/stop/reset)",
+      "§a[ROBW] 操作アイテムを渡しました。§f空中で右クリック§aでメニューを開けます。"
     );
-    logInfo(`gave ${CONFIG.WAND_ITEM} (${CONFIG.WAND_MENU_NAME}) to ${player.name}`);
-
-    tryGiveCustomControlItem(player);
+    logInfo(`gave ${CONFIG.WAND_ITEM_CUSTOM} (${CONFIG.WAND_MENU_NAME}) to ${player.name}`);
   } catch (error) {
     logError(`giveStarterWand failed for ${player.name}: ${error}`);
-    robwPlayerMessage(player, "§c[ROBW] 操作時計の配布に失敗しました");
-    robwPlayerMessage(player, "§7/scriptevent robw:give_wand run または /give @s clock 1");
+    robwPlayerMessage(player, "§c[ROBW] 操作アイテムの配布に失敗しました");
+    robwPlayerMessage(
+      player,
+      `§7/scriptevent robw:give_wand run または /give @s ${CONFIG.WAND_ITEM_CUSTOM} 1`
+    );
   }
 }
 
@@ -3606,14 +6264,20 @@ function handleScriptEvent(eventId, sourceEntity) {
   }
 
   const match =
-    id.match(/(?:^|[:_/])(start|stop|reset|ranking)$/) ??
-    id.match(/^robw[:_](start|stop|reset|ranking)$/);
+    id.match(
+      /(?:^|[:_/])(start|locate|travel|stage|find|register|coords|copycoords|stop|reset|ranking)$/
+    ) ??
+    id.match(
+      /^robw[:_](start|locate|travel|stage|find|register|coords|copycoords|stop|reset|ranking)$/
+    );
   if (!match) {
     logWarn(`unknown scriptevent id: ${eventId}`);
     return;
   }
 
-  runRobwSubcommand(match[1], player);
+  const action =
+    match[1] === "stage" || match[1] === "travel" ? "locate" : match[1];
+  runRobwSubcommand(action, player);
 }
 
 function onItemUsed(player, itemStack) {
@@ -3682,6 +6346,42 @@ function registerChatHandlers() {
   }
 }
 
+function registerRobwControlDropGuard() {
+  const before = world.beforeEvents?.playerDropItem;
+  if (!before) {
+    logWarn("playerDropItem not available for control item guard");
+    return;
+  }
+
+  before.subscribe((event) => {
+    const stack = event.itemStack;
+    if (!stack || stack.typeId !== CONFIG.WAND_ITEM_CUSTOM) return;
+    event.cancel = true;
+    const player = event.source;
+    if (!player?.isValid) return;
+    system.run(() => {
+      dedupeRobwControlItems(player);
+      robwPlayerMessage(player, "§c操作アイテムは捨てられません。");
+    });
+  });
+  logInfo("control item drop guard: beforeEvents.playerDropItem");
+}
+
+function registerRoundBlockProtection() {
+  const before = world.beforeEvents?.playerBreakBlock;
+  if (!before) {
+    logWarn("playerBreakBlock not available for round block guard");
+    return;
+  }
+
+  before.subscribe((event) => {
+    const block = event.block;
+    if (!block || !shouldCancelProtectedBlockBreak(block)) return;
+    event.cancel = true;
+  });
+  logInfo("round block guard: playerBreakBlock (chest / box100 room)");
+}
+
 function registerSubmissionChestHandler() {
   const interact = world.afterEvents?.playerInteractWithBlock;
   if (!interact) {
@@ -3690,9 +6390,20 @@ function registerSubmissionChestHandler() {
   }
 
   interact.subscribe((event) => {
-    if (!isSubmissionChestBlock(event.block)) return;
     const player = event.player;
     if (!player) return;
+
+    if (box100.isBox100Mode() && box100.isBox100ShulkerBlock(event.block, player)) {
+      box100.noteBox100ShulkerUse(player);
+      lastSubmissionPlayer = player;
+      lastSubmissionTick = system.currentTick;
+      for (const delay of SUBMISSION_PROCESS_DELAYS) {
+        system.runTimeout(() => box100.processBox100ShulkerDeliveries(), delay);
+      }
+      return;
+    }
+
+    if (!isSubmissionChestBlock(event.block)) return;
 
     noteSubmissionChestUse(player);
     for (const delay of SUBMISSION_PROCESS_DELAYS) {
@@ -3793,10 +6504,13 @@ function registerRobwCustomCommands(initEvent) {
   const specs = [
     ["robw:menu", "操作メニュー", "menu"],
     ["robw:start", "ゲート起動", "start"],
+    ["robw:locate", "構造物へ移動", "locate"],
+    ["robw:find", "構造物を探す", "find"],
+    ["robw:register", "現在地をステージ登録", "register"],
     ["robw:stop", "ゲート閉鎖", "stop"],
     ["robw:reset", "リセット", "reset"],
     ["robw:ranking", "ランキング", "ranking"],
-    ["robw:give_wand", "操作時計を配布", "give_wand"],
+    ["robw:give_wand", "操作アイテムを配布", "give_wand"],
   ];
 
   for (const [name, description, action] of specs) {
@@ -3950,11 +6664,44 @@ function registerHakoinuCombatHandlers() {
 function registerGameEvents() {
   if (gameEventsRegistered) return;
 
+  box100.initBox100Mode({
+    CONFIG,
+    world,
+    system,
+    logInfo,
+    logWarn,
+    logError,
+    broadcast,
+    broadcastSequence: robwBroadcastSequence,
+    robwPlayerMessage,
+    requestGameEnd,
+    countCaptureItemsInContainer,
+    clearCaptureItemsFromContainer,
+    clearInventoryExceptWand,
+    giveBones,
+    registerRoundWolf: (entityId) => {
+      if (!spawnedRoundEntityIds.includes(entityId)) {
+        spawnedRoundEntityIds.push(entityId);
+      }
+    },
+    clearRoundWolfRefs: () => {
+      spawnedRoundEntityIds = [];
+      scriptRemovedRoundEntityIds.clear();
+    },
+    noteShulkerSubmission: (player) => {
+      lastSubmissionPlayer = player;
+      lastSubmissionTick = system.currentTick;
+    },
+    resolveCommandHost: () => resolveStartHost(undefined),
+  });
+
   registerChatHandlers();
   registerItemUseHandlers();
   registerWandInteractHandlers();
   registerBoneInteractHandlers();
   registerSubmissionChestHandler();
+  registerRobwControlDropGuard();
+  registerRoundBlockProtection();
   registerHakoinuCombatHandlers();
   registerPlayerDeathHandlers();
 
@@ -3979,15 +6726,16 @@ function registerGameEvents() {
 function getRobwHelpLines() {
   const lines = [
     "§a[ROBW] 準備OK",
-    "§7(1) 操作時計(ROBW:menu)をブロック右クリック -> メニュー",
-    "§7(2) 骨で捕獲 -> 納品チェストに入れる",
-    "§7(3) §f/scriptevent robw:start run §7(チートON・推奨)",
-    "§7(4) §f/function robw/start §7(ワールドにパック適用時)",
+    "§7(1) 操作アイテム(ROBW:menu)を空中で右クリック -> メニュー",
+    "§7(2) start=モード選択 / box100=100匹チャレンジ / locate=構造物へ移動",
+    "§7(3) 骨で捕獲 -> 納品チェストに入れる",
+    "§7(4) §f/scriptevent robw:start run §7(チートON・推奨)",
+    "§7(5) §f/function robw/start §7(ワールドにパック適用時)",
   ];
   if (chatHandlerMode === "none") {
     lines.push("§c(注) !robw は Beta APIs 実験的機能が必要です");
   } else {
-    lines.push(`§7(5) チャット: §f!robw start §7(${chatHandlerMode})`);
+    lines.push(`§7(6) チャット: §f!robw start §7/ §f!robw locate village §7(${chatHandlerMode})`);
   }
   return lines;
 }
@@ -4022,7 +6770,7 @@ function announceRobwReady() {
     try {
       robwPlayerMessage(player, "§a[ROBW] 準備OK");
       if (isSessionHost(player)) {
-        robwPlayerMessage(player, "§7あなたは§6ホスト§7です。操作時計でゲートを起動できます。");
+        robwPlayerMessage(player, "§7あなたは§6ホスト§7です。操作アイテムでゲートを起動できます。");
       } else {
         robwPlayerMessage(player, "§7あなたは§f参加者§7です。ゲートの起動はホストが行います。");
       }
@@ -4050,6 +6798,7 @@ function onAddonReady() {
       startDaytimeLockLoop();
       startTimerHudWatchdog();
       addonReadyDone = true;
+      logInfo(`ROBW main.js active (pack ${ROBW_PACK_VERSION})`);
       logInfo("Return of BoxWorld addon loaded (state: waiting)");
       logInfo(
         `box gate: (${CONFIG.BOX_GATE.x}, ${CONFIG.BOX_GATE.y}, ${CONFIG.BOX_GATE.z}) r=${CONFIG.BOX_GATE.radius}`,
@@ -4077,6 +6826,11 @@ function onAddonReady() {
   }
 
   ensureStarterWandsForAllPlayers();
+
+  const host = getSessionHost();
+  if (host?.isValid) {
+    scheduleStructureLocatePrefetch(host, 100);
+  }
 }
 
 function scheduleAddonReady() {
@@ -4084,7 +6838,8 @@ function scheduleAddonReady() {
 }
 
 function bootstrapRobwScript() {
-  console.warn("[ROBW] bootstrap");
+  console.warn(`[ROBW] bootstrap (pack ${ROBW_PACK_VERSION})`);
+  logInfo(`ROBW script bootstrap start (pack ${ROBW_PACK_VERSION})`);
   try {
     registerRobwItemComponents();
   } catch (error) {
@@ -4125,7 +6880,7 @@ world.afterEvents.playerSpawn.subscribe((event) => {
       }
       if (isSessionHost(player)) {
         if (wasHostless) {
-          robwPlayerMessage(player, "§7あなたは§6ホスト§7です。操作時計でゲートを起動できます。");
+          robwPlayerMessage(player, "§7あなたは§6ホスト§7です。操作アイテムでゲートを起動できます。");
         }
       } else {
         const host = getSessionHost();
@@ -4139,6 +6894,9 @@ world.afterEvents.playerSpawn.subscribe((event) => {
     if (isSessionHost(player)) {
       giveStarterWand(player);
       scheduleStarterWandRetries(player);
+      if (event.initialSpawn) {
+        scheduleStructureLocatePrefetch(player, 120);
+      }
     } else {
       removeRobwWandsFromPlayer(player);
     }

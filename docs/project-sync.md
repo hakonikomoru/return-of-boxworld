@@ -3,9 +3,7 @@
 > ChatGPT / 他 AI 向けの同期用ドキュメント。実装前に読むこと。
 
 <!-- sync:auto:meta:start -->
-
-最終更新の想定リポジトリ: `hakonikomoru/return-of-boxworld`（`main`・`bc6b2c4`・2026-06-02・`npm run sync:project-docs` 自動反映）
-
+最終更新の想定リポジトリ: `hakonikomoru/return-of-boxworld`（`main`・`pending`・2026-06-03・`npm run sync:project-docs` 自動反映）
 <!-- sync:auto:meta:end -->
 
 ---
@@ -94,7 +92,7 @@ return-of-boxworld/
 ### プレイの流れ
 
 1. **地面に立って** start（起動者の位置がラウンド中心）
-2. **minecraft:bone** を持ち、**4 ブロック以内**の動物を **空中で右クリック**（捕獲・**骨 ×1 消費**）
+2. **minecraft:bone** を持ち、**undefined ブロック以内**の動物を **空中で右クリック**（捕獲・**骨 ×1 消費**）
 3. 骨で捕獲 → どちらも **捕獲した毛皮**（同じ見た目。正解は納品時に +pt / 別種は -pt）
 4. 捕獲アイテムを **自動設置の納品チェスト（1つ）** に入れる → 得点加算のあと **毛皮はチェストから消える**
 5. 時間切れまたは stop で閉鎖 → ランキング
@@ -143,22 +141,27 @@ return-of-boxworld/
 
 ### 操作・コマンド
 
-| 種別                    | 入力                                         | 備考               |
-| ----------------------- | -------------------------------------------- | ------------------ |
-| チャット                | `!robw start` / `stop` / `reset` / `ranking` | **Beta APIs** 必須 |
-| 時計（minecraft:clock） | 名前 `ROBW:menu` を空中で右クリック          | → `menu`           |
-| 時計（minecraft:clock） | 名前 `ROBW:start` を空中で右クリック         | → `menu`           |
-| 時計（minecraft:clock） | 名前 `ROBW:stop` を空中で右クリック          | → `stop`           |
-| 時計（minecraft:clock） | 名前 `ROBW:reset` を空中で右クリック         | → `reset`          |
-| 時計（minecraft:clock） | 名前 `ROBW:ranking` を空中で右クリック       | → `ranking`        |
-| 関数                    | `/function robw/give_wand`                   | チート ON          |
-| 関数                    | `/function robw/menu`                        | チート ON          |
-| 関数                    | `/function robw/ping`                        | チート ON          |
-| 関数                    | `/function robw/ranking`                     | チート ON          |
-| 関数                    | `/function robw/reset`                       | チート ON          |
-| 関数                    | `/function robw/start`                       | チート ON          |
-| 関数                    | `/function robw/stop`                        | チート ON          |
-| scriptevent             | `/scriptevent robw:start` 等                 | チート ON          |
+| 種別 | 入力 | 備考 |
+|------|------|------|
+| チャット | `!robw start` / `stop` / `reset` / `ranking` | **Beta APIs** 必須 |
+| 操作アイテム（robw:control） | 名前 `ROBW:menu` を空中で右クリック | → `menu` |
+| 操作アイテム（robw:control） | 名前 `ROBW:start` を空中で右クリック | → `menu` |
+| 操作アイテム（robw:control） | 名前 `ROBW:stop` を空中で右クリック | → `stop` |
+| 操作アイテム（robw:control） | 名前 `ROBW:reset` を空中で右クリック | → `reset` |
+| 操作アイテム（robw:control） | 名前 `ROBW:ranking` を空中で右クリック | → `ranking` |
+| 関数 | `/function robw/coords` | チート ON |
+| 関数 | `/function robw/find` | チート ON |
+| 関数 | `/function robw/give_wand` | チート ON |
+| 関数 | `/function robw/locate` | チート ON |
+| 関数 | `/function robw/menu` | チート ON |
+| 関数 | `/function robw/ping` | チート ON |
+| 関数 | `/function robw/ranking` | チート ON |
+| 関数 | `/function robw/register` | チート ON |
+| 関数 | `/function robw/reset` | チート ON |
+| 関数 | `/function robw/start` | チート ON |
+| 関数 | `/function robw/stop` | チート ON |
+| 関数 | `/function robw/travel` | チート ON |
+| scriptevent | `/scriptevent robw:start` 等 | チート ON |
 
 ### ゲーム状態
 

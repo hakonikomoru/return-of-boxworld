@@ -292,7 +292,9 @@ export function parseRobwGameSpec(mainJsSource) {
     pointsHakoinuHit: parseConfigNumber(block, "POINTS_HAKOINU_HIT"),
     scoreObjective: parseConfigString(block, "SCORE_OBJECTIVE"),
     chatPrefix: parseConfigString(block, "CHAT_PREFIX"),
-    wandItem: parseConfigString(block, "WAND_ITEM"),
+    wandItem:
+      parseConfigString(block, "WAND_ITEM_CUSTOM") ||
+      parseConfigString(block, "WAND_ITEM"),
     wandNames: parseConfigObjectEntries(block, "WAND_NAMES"),
     milestoneSeconds: milestones,
   };
@@ -394,7 +396,7 @@ export function generateGameRulesMarkdown(spec, mcFunctions = []) {
     `| チャット | \`${spec.chatPrefix} start\` / \`stop\` / \`reset\` / \`ranking\` | **Beta APIs** 必須 |`,
     ...spec.wandNames.map(
       (w) =>
-        `| 時計（${spec.wandItem}） | 名前 \`${w.label}\` を空中で右クリック | → \`${w.action}\` |`,
+        `| 操作アイテム（${spec.wandItem}） | 名前 \`${w.label}\` を空中で右クリック | → \`${w.action}\` |`,
     ),
     ...mcFunctions.map((name) => `| 関数 | \`/function robw/${name}\` | チート ON |`),
     `| scriptevent | \`/scriptevent robw:start\` 等 | チート ON |`,

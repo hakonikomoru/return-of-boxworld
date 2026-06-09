@@ -4,7 +4,7 @@
     "name": "Return of BoxWorld",
     "description": "現世に迷い込んだボックスワールドの犬たちを、帰還ボックスで保護して元の世界へ帰すリスナー参加型ミニゲーム。",
     "uuid": "e1f2a3b4-5c6d-4e7f-9012-3456789abcde",
-    "version": [0, 1, 2],
+    "version": [0, 1, 3],
     "min_engine_version": [1, 21, 0]
   },
   "metadata": {
@@ -14,7 +14,7 @@
     {
       "type": "resources",
       "uuid": "f2a3b4c5-6d7e-4f80-a123-456789abcdef",
-      "version": [0, 1, 2]
+      "version": [0, 1, 3]
     }
   ]
 }

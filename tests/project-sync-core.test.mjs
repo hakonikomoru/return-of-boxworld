@@ -62,7 +62,7 @@ const MILESTONE_SECONDS = [60, 30, 10];
     );
     const spec = parseRobwGameSpec(mainJs);
     assert.equal(spec.chatPrefix, "!robw");
-    assert.equal(spec.wandItem, "minecraft:clock");
+    assert.equal(spec.wandItem, "robw:control");
     assert.ok(spec.startSpawnHakoinu > 0);
     assert.equal(spec.pointsHakoinuHit, -1);
     assert.deepEqual(spec.milestoneSeconds, [60, 30, 10]);
