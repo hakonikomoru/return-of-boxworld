@@ -38,6 +38,29 @@ const wolfEntityIds = new Set();
 /** @type {Map<string, Box100PlayerRoom>} */
 const playerRooms = new Map();
 
+/** 削除漏れ対策: 直近に生成した部屋の原点（resetBox100State 後も保持） */
+/** @type {Array<{ x: number, y: number, z: number }>} */
+let persistedArenaRoomOrigins = [];
+
+/** 前回ラウンドのグリッド配置（削除失敗時の掃除用） */
+/** @type {{ anchorX: number, anchorZ: number, floorY: number, playerCount: number } | null} */
+let lastArenaLayout = null;
+
+/**
+ * 終了後のランキング表示・メニュー用スナップショット
+ * @type {{
+ *   startedAtMs: number,
+ *   target: number,
+ *   entries: Array<{
+ *     playerName: string,
+ *     deliveredCount: number,
+ *     finishedAtMs: number | null,
+ *     rank: number | null,
+ *   }>,
+ * } | null}
+ */
+let lastRankingSnapshot = null;
+
 /** @type {number | null} */
 let nightVisionRefreshLoopId = null;
 
@@ -316,19 +339,139 @@ function toCommandBlockName(typeId) {
   return String(typeId).replace(/^minecraft:/, "");
 }
 
-function runHostFillCommand(host, x1, y1, z1, x2, y2, z2, typeId) {
-  if (!host?.isValid || typeof host.runCommand !== "function") {
-    return false;
+function originKey(origin) {
+  return `${origin.x},${origin.y},${origin.z}`;
+}
+
+function rememberArenaRoomOrigin(origin) {
+  const key = originKey(origin);
+  if (!persistedArenaRoomOrigins.some((o) => originKey(o) === key)) {
+    persistedArenaRoomOrigins.push({
+      x: origin.x,
+      y: origin.y,
+      z: origin.z,
+    });
   }
+}
+
+function collectKnownArenaRoomOrigins() {
+  /** @type {Map<string, { x: number, y: number, z: number }>} */
+  const origins = new Map();
+  for (const origin of persistedArenaRoomOrigins) {
+    origins.set(originKey(origin), origin);
+  }
+  for (const room of playerRooms.values()) {
+    origins.set(originKey(room.origin), room.origin);
+  }
+  return [...origins.values()];
+}
+
+function getBox100RemovableBlockNames() {
+  const names = new Set(["glass", "stained_glass"]);
+  for (const color of getColors()) {
+    names.add(toCommandBlockName(getColorShellId(color)));
+    if (color.shulker) {
+      names.add(toCommandBlockName(color.shulker));
+    }
+  }
+  return [...names];
+}
+
+function runFillReplaceCommand(host, dimension, x1, y1, z1, x2, y2, z2, blockName) {
+  const cmd = `fill ${Math.floor(x1)} ${Math.floor(y1)} ${Math.floor(z1)} ${Math.floor(x2)} ${Math.floor(y2)} ${Math.floor(z2)} air replace ${blockName}`;
+  if (host?.isValid && typeof host.runCommand === "function") {
+    try {
+      const result = host.runCommand(cmd);
+      if ((result?.successCount ?? 0) > 0) return true;
+    } catch (error) {
+      logWarn(`fill replace failed (${cmd}): ${error}`);
+    }
+  }
+  if (dimension && typeof dimension.runCommand === "function") {
+    try {
+      const result = dimension.runCommand(cmd);
+      if ((result?.successCount ?? 0) > 0) return true;
+    } catch (error) {
+      logWarn(`dimension fill replace failed (${cmd}): ${error}`);
+    }
+  }
+  return false;
+}
+
+const FILL_TILE_SIZE = 28;
+
+function getRoomChunkPreloadTicks() {
+  return Math.max(10, Math.floor(getBox100Config().ROOM_CHUNK_PRELOAD_TICKS ?? 20));
+}
+
+/** 遠方スロット向け: 対角2点だけテレポートしてチャンクを載せる（getBlock 走査はしない） */
+function forceLoadBounds(host, dimension, x0, y0, z0, x1, y1, z1) {
+  const dim = dimension ?? host?.dimension;
+  if (!dim) return;
+  if (!host?.isValid || typeof host.teleport !== "function") return;
+
+  const visitY = Math.min(y1, y0 + 2);
+  const saved = {
+    x: host.location.x,
+    y: host.location.y,
+    z: host.location.z,
+    dimension: host.dimension,
+  };
+  try {
+    host.teleport({ x: x0 + 0.5, y: visitY, z: z0 + 0.5 }, { dimension: dim });
+    host.teleport({ x: x1 + 0.5, y: visitY, z: z1 + 0.5 }, { dimension: dim });
+    host.teleport(
+      { x: saved.x, y: saved.y, z: saved.z },
+      { dimension: saved.dimension }
+    );
+  } catch (error) {
+    logWarn(`forceLoadBounds failed: ${error}`);
+  }
+}
+
+function runFillRegionTiled(host, dimension, x0, y0, z0, x1, y1, z1, typeId) {
+  const tile = FILL_TILE_SIZE;
+  let placedTiles = 0;
+  let totalTiles = 0;
+  for (let x = x0; x <= x1; x += tile) {
+    for (let z = z0; z <= z1; z += tile) {
+      for (let y = y0; y <= y1; y += tile) {
+        const ex = Math.min(x + tile - 1, x1);
+        const ey = Math.min(y + tile - 1, y1);
+        const ez = Math.min(z + tile - 1, z1);
+        totalTiles += 1;
+        if (runFillCommand(host, dimension, x, y, z, ex, ey, ez, typeId)) {
+          placedTiles += 1;
+        }
+      }
+    }
+  }
+  return { placedTiles, totalTiles };
+}
+
+function runFillCommand(host, dimension, x1, y1, z1, x2, y2, z2, typeId) {
   const blockName = toCommandBlockName(typeId);
   const cmd = `fill ${Math.floor(x1)} ${Math.floor(y1)} ${Math.floor(z1)} ${Math.floor(x2)} ${Math.floor(y2)} ${Math.floor(z2)} ${blockName}`;
-  try {
-    const result = host.runCommand(cmd);
-    return (result?.successCount ?? 0) > 0;
-  } catch (error) {
-    logWarn(`fill command failed (${cmd}): ${error}`);
-    return false;
+
+  if (host?.isValid && typeof host.runCommand === "function") {
+    try {
+      const result = host.runCommand(cmd);
+      if ((result?.successCount ?? 0) > 0) return true;
+    } catch (error) {
+      logWarn(`fill command failed (${cmd}): ${error}`);
+    }
   }
+
+  if (dimension && typeof dimension.runCommand === "function") {
+    try {
+      const result = dimension.runCommand(cmd);
+      if ((result?.successCount ?? 0) > 0) return true;
+    } catch (error) {
+      logWarn(`dimension fill failed (${cmd}): ${error}`);
+    }
+  }
+
+  return false;
 }
 
 function setBlockSafe(dimension, x, y, z, typeId) {
@@ -368,60 +511,129 @@ function setBlockSafe(dimension, x, y, z, typeId) {
   }
 }
 
-/**
- * 色付きガラスの箱を生成。ホストの /fill を優先（setType が使えない環境対策）
- */
-function buildGlassRoom(host, origin, size, height, shellId, dimension) {
+/** 箱全体をガラスで上書きしてから中を空ける（不純物を残さない） */
+function buildGlassRoomShellOverwrite(host, dimension, origin, size, height, shellId) {
   const x0 = origin.x;
   const y0 = origin.y;
   const z0 = origin.z;
   const x1 = x0 + size - 1;
   const y1 = y0 + height - 1;
   const z1 = z0 + size - 1;
+  const cmdHost = host ?? resolveBox100CommandHost();
 
-  if (host?.isValid) {
-    const outer = runHostFillCommand(host, x0, y0, z0, x1, y1, z1, shellId);
-    if (!outer) {
-      logWarn(
-        `buildGlassRoom fill outer failed at (${x0},${y0},${z0}) — チートONとコマンド権限を確認`
-      );
-      return 0;
-    }
-    if (size > 2 && height > 2) {
-      runHostFillCommand(
-        host,
-        x0 + 1,
-        y0 + 1,
-        z0 + 1,
-        x1 - 1,
-        y1 - 1,
-        z1 - 1,
-        "minecraft:air"
-      );
-    }
-    logInfo(`room fill ok: (${x0},${y0},${z0}) size=${size} h=${height}`);
-    return size * size * height;
+  const outer = runFillRegionTiled(
+    cmdHost,
+    dimension,
+    x0,
+    y0,
+    z0,
+    x1,
+    y1,
+    z1,
+    shellId
+  );
+  if (size > 2 && height > 2) {
+    runFillRegionTiled(
+      cmdHost,
+      dimension,
+      x0 + 1,
+      y0 + 1,
+      z0 + 1,
+      x1 - 1,
+      y1 - 1,
+      z1 - 1,
+      "minecraft:air"
+    );
+  }
+  return outer;
+}
+
+function buildGlassRoomShellWithFills(host, dimension, origin, size, height, shellId) {
+  const x0 = origin.x;
+  const y0 = origin.y;
+  const z0 = origin.z;
+  const x1 = x0 + size - 1;
+  const y1 = y0 + height - 1;
+  const z1 = z0 + size - 1;
+  const cmdHost = host ?? resolveBox100CommandHost();
+  let placedTiles = 0;
+  let totalTiles = 0;
+
+  const addFace = (fx0, fy0, fz0, fx1, fy1, fz1) => {
+    const result = runFillRegionTiled(
+      cmdHost,
+      dimension,
+      fx0,
+      fy0,
+      fz0,
+      fx1,
+      fy1,
+      fz1,
+      shellId
+    );
+    placedTiles += result.placedTiles;
+    totalTiles += result.totalTiles;
+  };
+
+  addFace(x0, y0, z0, x1, y0, z1);
+  addFace(x0, y1, z0, x1, y1, z1);
+  if (height > 2) {
+    addFace(x0, y0 + 1, z0, x0, y1 - 1, z1);
+    addFace(x1, y0 + 1, z0, x1, y1 - 1, z1);
+    addFace(x0, y0 + 1, z0, x1, y1 - 1, z0);
+    addFace(x0, y0 + 1, z1, x1, y1 - 1, z1);
+  }
+  if (size > 2 && height > 2) {
+    runFillRegionTiled(
+      cmdHost,
+      dimension,
+      x0 + 1,
+      y0 + 1,
+      z0 + 1,
+      x1 - 1,
+      y1 - 1,
+      z1 - 1,
+      "minecraft:air"
+    );
+  }
+  return { placedTiles, totalTiles };
+}
+
+/** 色付きガラスの箱を生成（ガラス fill で上書き。検証・修復ループは行わない） */
+function buildGlassRoom(host, origin, size, height, shellId, dimension) {
+  const x0 = origin.x;
+  const y0 = origin.y;
+  const z0 = origin.z;
+
+  let fillResult = buildGlassRoomShellOverwrite(
+    host,
+    dimension,
+    origin,
+    size,
+    height,
+    shellId
+  );
+  if (fillResult.placedTiles <= 0) {
+    logWarn(`room overwrite fill weak at (${x0},${y0},${z0}), trying face fills`);
+    fillResult = buildGlassRoomShellWithFills(
+      host,
+      dimension,
+      origin,
+      size,
+      height,
+      shellId
+    );
   }
 
-  let placed = 0;
-  for (let dx = 0; dx < size; dx += 1) {
-    for (let dz = 0; dz < size; dz += 1) {
-      for (let dy = 0; dy < height; dy += 1) {
-        const shell =
-          dx === 0 ||
-          dz === 0 ||
-          dx === size - 1 ||
-          dz === size - 1 ||
-          dy === 0 ||
-          dy === height - 1;
-        const typeId = shell ? shellId : "minecraft:air";
-        if (setBlockSafe(dimension, x0 + dx, y0 + dy, z0 + dz, typeId)) {
-          placed += 1;
-        }
-      }
-    }
+  if (fillResult.placedTiles <= 0) {
+    logWarn(`room fill failed at (${x0},${y0},${z0})`);
+    return 0;
   }
-  return placed;
+
+  logInfo(
+    `room ok: (${x0},${y0},${z0}) size=${size} h=${height} shell=${fillResult.placedTiles}/${fillResult.totalTiles}`
+  );
+  return size * size * height;
 }
 
 function resolveBox100CommandHost() {
@@ -430,6 +642,48 @@ function resolveBox100CommandHost() {
     if (host?.isValid) return host;
   }
   return world.getPlayers().find((p) => p?.isValid) ?? null;
+}
+
+function destroyLastArenaLayout(host, dimension) {
+  if (!lastArenaLayout) return 0;
+  const cfg = getBox100Config();
+  const size = cfg.ROOM_SIZE ?? 30;
+  const height = cfg.ROOM_HEIGHT ?? 10;
+  const { anchorX, anchorZ, floorY, playerCount } = lastArenaLayout;
+  const cmdHost = host ?? resolveBox100CommandHost();
+  logInfo(
+    `cleaning previous arena layout: anchor=(${anchorX},${anchorZ}) floorY=${floorY} rooms=${playerCount}`
+  );
+  for (let i = 0; i < playerCount; i += 1) {
+    const origin = getRoomOriginForGridSlot(
+      anchorX,
+      anchorZ,
+      floorY,
+      i,
+      playerCount
+    );
+    destroyGlassRoom(cmdHost, origin, size, height, dimension);
+  }
+  return playerCount;
+}
+
+function destroyAllKnownArenaRooms(host, dimension) {
+  const cfg = getBox100Config();
+  const size = cfg.ROOM_SIZE ?? 30;
+  const height = cfg.ROOM_HEIGHT ?? 10;
+  const cmdHost = host ?? resolveBox100CommandHost();
+
+  destroyLastArenaLayout(cmdHost, dimension);
+
+  const origins = collectKnownArenaRoomOrigins();
+  if (origins.length > 0) {
+    logInfo(`destroying ${origins.length} tracked arena room(s)`);
+    for (const origin of origins) {
+      destroyGlassRoom(cmdHost, origin, size, height, dimension);
+    }
+  }
+  persistedArenaRoomOrigins = [];
+  return origins.length;
 }
 
 /** ガラス箱全体を air で削除 */
@@ -442,20 +696,36 @@ function destroyGlassRoom(host, origin, size, height, dimension) {
   const z1 = z0 + size - 1;
 
   const cmdHost = host ?? resolveBox100CommandHost();
-  if (cmdHost?.isValid) {
-    if (runHostFillCommand(cmdHost, x0, y0, z0, x1, y1, z1, "minecraft:air")) {
-      return true;
+
+  let removed = 0;
+  if (
+    runFillCommand(cmdHost, dimension, x0, y0, z0, x1, y1, z1, "minecraft:air")
+  ) {
+    removed += 1;
+  }
+  for (const blockName of getBox100RemovableBlockNames()) {
+    if (
+      runFillReplaceCommand(
+        cmdHost,
+        dimension,
+        x0,
+        y0,
+        z0,
+        x1,
+        y1,
+        z1,
+        blockName
+      )
+    ) {
+      removed += 1;
     }
-    logWarn(`destroyGlassRoom fill failed at (${x0},${y0},${z0})`);
   }
 
-  for (let dx = 0; dx < size; dx += 1) {
-    for (let dz = 0; dz < size; dz += 1) {
-      for (let dy = 0; dy < height; dy += 1) {
-        setBlockSafe(dimension, x0 + dx, y0 + dy, z0 + dz, "minecraft:air");
-      }
-    }
+  if (removed <= 0) {
+    logWarn(`destroyGlassRoom failed at (${x0},${y0},${z0})`);
+    return false;
   }
+  logInfo(`room removed (${x0},${y0},${z0}) fill=${removed}`);
   return true;
 }
 
@@ -463,32 +733,48 @@ function randomInt(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
-function spawnWolvesInRoom(dimension, room) {
+function spawnWolvesInRoomBatched(dimension, room, onComplete) {
   const cfg = getBox100Config();
   const size = cfg.ROOM_SIZE ?? 30;
   const height = cfg.ROOM_HEIGHT ?? 10;
   const margin = cfg.SPAWN_MARGIN ?? 3;
   const count = getBox100TargetCount();
+  const batchSize = Math.max(
+    10,
+    Math.floor(cfg.WOLF_SPAWN_BATCH_SIZE ?? 20)
+  );
+  const batchTicks = Math.max(1, Math.floor(cfg.WOLF_SPAWN_BATCH_TICKS ?? 3));
   let spawned = 0;
+  let index = 0;
+  const floorY = room.origin.y;
+  const maxSpawnY = Math.max(floorY + 2, floorY + height - 2);
 
-  for (let i = 0; i < count; i += 1) {
-    const x = room.origin.x + randomInt(margin, size - margin - 1) + 0.5;
-    const z = room.origin.z + randomInt(margin, size - margin - 1) + 0.5;
-    const y = room.origin.y + randomInt(1, height - 3);
-    try {
-      const entity = dimension.spawnEntity("minecraft:wolf", { x, y, z });
-      if (entity?.isValid) {
-        wolfEntityIds.add(entity.id);
-        deps.registerRoundWolf?.(entity.id);
-        spawned += 1;
+  const spawnBatch = () => {
+    const end = Math.min(index + batchSize, count);
+    for (; index < end; index += 1) {
+      const x = room.origin.x + randomInt(margin, size - margin - 1) + 0.5;
+      const z = room.origin.z + randomInt(margin, size - margin - 1) + 0.5;
+      const y = randomInt(floorY + 2, maxSpawnY) + 0.5;
+      try {
+        const entity = dimension.spawnEntity("minecraft:wolf", { x, y, z });
+        if (entity?.isValid) {
+          wolfEntityIds.add(entity.id);
+          deps.registerRoundWolf?.(entity.id);
+          spawned += 1;
+        }
+      } catch (error) {
+        logWarn(`wolf spawn failed in ${room.playerName} room: ${error}`);
       }
-    } catch (error) {
-      logWarn(`wolf spawn failed in ${room.playerName} room: ${error}`);
     }
-  }
+    if (index < count) {
+      system.runTimeout(spawnBatch, batchTicks);
+      return;
+    }
+    logInfo(`wolves spawned ${spawned}/${count} for ${room.playerName}`);
+    onComplete(spawned);
+  };
 
-  logInfo(`wolves spawned ${spawned}/${count} for ${room.playerName}`);
-  return spawned;
+  spawnBatch();
 }
 
 function placeRoomShulker(host, dimension, room) {
@@ -655,25 +941,41 @@ function resetBox100Scores() {
 /**
  * @param {import("@minecraft/server").Player} host
  * @param {import("@minecraft/server").Dimension} dimension
- * @returns {{ ok: boolean, message?: string, players?: import("@minecraft/server").Player[] }}
+ * @param {{ x?: number, y?: number, z?: number } | null} [anchor]
+ * @param {(result: { ok: boolean, message?: string, players?: import("@minecraft/server").Player[], pending?: boolean }) => void} [onComplete]
+ * @returns {{ ok: boolean, message?: string, players?: import("@minecraft/server").Player[], pending?: boolean }}
  */
-export function prepareBox100Arena(host, dimension) {
+export function prepareBox100Arena(host, dimension, anchor = null, onComplete) {
+  const complete = (result) => {
+    if (typeof onComplete === "function") onComplete(result);
+    return result;
+  };
+
+  persistedArenaRoomOrigins = [];
+  clearBox100RankingSnapshot();
   resetBox100State();
   box100Active = true;
 
   const colors = getColors();
   if (colors.length === 0) {
-    return { ok: false, message: "§cBOX100 の色設定がありません。" };
+    return complete({ ok: false, message: "§cBOX100 の色設定がありません。" });
   }
 
   const players = world.getPlayers().filter((p) => p?.isValid).slice(0, getMaxPlayers());
   if (players.length === 0) {
-    return { ok: false, message: "§c参加者がいません。" };
+    return complete({ ok: false, message: "§c参加者がいません。" });
   }
 
-  const hostX = Math.floor(host.location.x);
-  const hostY = Math.floor(host.location.y);
-  const hostZ = Math.floor(host.location.z);
+  if (typeof onComplete !== "function") {
+    return complete({
+      ok: false,
+      message: "§c部屋生成の準備コールバックがありません。",
+    });
+  }
+
+  const hostX = Math.floor(anchor?.x ?? host.location.x);
+  const hostY = Math.floor(anchor?.y ?? host.location.y);
+  const hostZ = Math.floor(anchor?.z ?? host.location.z);
   const cfg = getBox100Config();
   const size = cfg.ROOM_SIZE ?? 30;
   const shulkerOffset = cfg.SHULKER_OFFSET ?? { x: 15, y: 1, z: 15 };
@@ -684,19 +986,70 @@ export function prepareBox100Arena(host, dimension) {
   const gridSpacing = getRoomGridSpacing();
   const gridRows = Math.ceil(players.length / gridCols);
 
+  const playerNames = players.map((p) => p.name).join(", ");
   if (skyFloorY != null) {
     logInfo(
-      `sky arena: floorY=${arenaFloorY} anchor=(${hostX},${hostZ}) players=${players.length} grid=${gridCols}x${gridRows} pitch=${gridSpacing}`
+      `sky arena: floorY=${arenaFloorY} anchor=(${hostX},${hostZ}) rooms=${players.length} grid=${gridCols}x${gridRows} pitch=${gridSpacing} players=${playerNames}`
     );
   } else {
     logInfo(
-      `arena grid: ${gridCols}x${gridRows} spacing=${gridSpacing} players=${players.length}`
+      `arena grid: ${gridCols}x${gridRows} spacing=${gridSpacing} rooms=${players.length} players=${playerNames}`
     );
   }
 
   const roundColors = pickColorsForRound(players.length);
+  const roomHeight = cfg.ROOM_HEIGHT ?? 10;
 
-  for (let i = 0; i < players.length; i += 1) {
+  const stepTicks = Math.max(
+    10,
+    Math.floor(getBox100Config().ROOM_BUILD_STEP_TICKS ?? 20)
+  );
+  const preloadTicks = getRoomChunkPreloadTicks();
+  const maxBuildAttempts = Math.max(
+    1,
+    Math.floor(getBox100Config().ROOM_BUILD_MAX_ATTEMPTS ?? 2)
+  );
+  let buildIndex = 0;
+
+  const failPrepare = (message) => {
+    cleanupBox100Entities(dimension, { removeRooms: true });
+    complete({ ok: false, message });
+  };
+
+  const finishPrepare = () => {
+    resetBox100Scores();
+    for (const player of players) {
+      const room = playerRooms.get(player.id);
+      if (!room) continue;
+      giveBox100Loadout(player);
+      teleportToRoom(player, room);
+      setDeliveredScore(player, 0);
+    }
+
+    applyBox100NightVisionToParticipants();
+    startBox100NightVisionRefreshLoop();
+
+    lastArenaLayout = {
+      anchorX: hostX,
+      anchorZ: hostZ,
+      floorY: arenaFloorY,
+      playerCount: players.length,
+    };
+    logInfo(
+      `arena ready: ${playerRooms.size} room(s) for ${players.length} player(s)`
+    );
+    complete({ ok: true, players });
+  };
+
+  const buildNextRoom = () => {
+    if (buildIndex >= players.length) {
+      finishPrepare();
+      return;
+    }
+
+    const i = buildIndex;
+    const roomIndex = buildIndex + 1;
+    buildIndex += 1;
     const player = players[i];
     const color = roundColors[i];
     const origin = getRoomOriginForGridSlot(
@@ -706,6 +1059,7 @@ export function prepareBox100Arena(host, dimension) {
       i,
       players.length
     );
+
     const shulkerPos = {
       x: origin.x + shulkerOffset.x,
       y: origin.y + shulkerOffset.y,
@@ -726,64 +1080,85 @@ export function prepareBox100Arena(host, dimension) {
       rank: null,
     };
 
-    try {
-      const blocks = buildGlassRoom(
-        host,
-        origin,
-        size,
-        cfg.ROOM_HEIGHT ?? 10,
-        room.shellId,
-        dimension
-      );
-      if (blocks <= 0) {
-        return {
-          ok: false,
-          message: `§c${player.name} の部屋を生成できませんでした。`,
-        };
+    deps.broadcast?.(
+      `§7部屋を生成中... §f${roomIndex}/${players.length} §7(${player.name})`,
+      { priority: "high" }
+    );
+    logInfo(
+      `building room ${roomIndex}/${players.length}: ${player.name} at (${origin.x},${origin.y},${origin.z})`
+    );
+
+    const finalizeRoom = () => {
+      try {
+        rememberArenaRoomOrigin(origin);
+        if (!placeRoomShulker(host, dimension, room)) {
+          failPrepare(`§c${player.name} のシュルカーを設置できませんでした。`);
+          return;
+        }
+        playerRooms.set(player.id, room);
+        deps.robwPlayerMessage?.(
+          player,
+          `§7あなたの色: §f${color.label}§7（ガラス箱・シュルカー）`
+        );
+        logInfo(
+          `room ready: ${player.name} color=${color.label} origin=(${origin.x},${origin.y},${origin.z})`
+        );
+        system.runTimeout(buildNextRoom, stepTicks);
+      } catch (error) {
+        logError(`arena setup failed for ${player.name}: ${error}`);
+        failPrepare(`§c部屋生成中にエラー: ${error}`);
       }
-      if (!placeRoomShulker(host, dimension, room)) {
-        return {
-          ok: false,
-          message: `§c${player.name} のシュルカーを設置できませんでした。`,
-        };
+    };
+
+    const tryBuildRoom = (attempt) => {
+      try {
+        const blocks = buildGlassRoom(
+          host,
+          origin,
+          size,
+          roomHeight,
+          room.shellId,
+          dimension
+        );
+        if (blocks > 0) {
+          finalizeRoom();
+          return;
+        }
+        if (attempt < maxBuildAttempts) {
+          logWarn(
+            `room build retry ${attempt + 1}/${maxBuildAttempts} for ${player.name} at (${origin.x},${origin.y},${origin.z})`
+          );
+          preloadRoomChunks(i, origin, () => tryBuildRoom(attempt + 1));
+          return;
+        }
+        failPrepare(`§c${player.name} の部屋を生成できませんでした。`);
+      } catch (error) {
+        logError(`arena setup failed for ${player.name}: ${error}`);
+        failPrepare(`§c部屋生成中にエラー: ${error}`);
       }
-      const wolves = spawnWolvesInRoom(dimension, room);
-      if (wolves <= 0) {
-        return {
-          ok: false,
-          message: `§c${player.name} の部屋にオオカミを出せませんでした。`,
-        };
-      }
-      playerRooms.set(player.id, room);
-      deps.robwPlayerMessage?.(
-        player,
-        `§7あなたの色: §f${color.label}§7（ガラス箱・シュルカー）`
-      );
-      logInfo(
-        `room ready: ${player.name} color=${color.label} origin=(${origin.x},${origin.y},${origin.z})`
-      );
-    } catch (error) {
-      logError(`arena setup failed for ${player.name}: ${error}`);
-      return {
-        ok: false,
-        message: `§c部屋生成中にエラー: ${error}`,
-      };
+    };
+
+    preloadRoomChunks(i, origin, () => tryBuildRoom(0));
+  };
+
+  const preloadRoomChunks = (slotIndex, origin, onReady) => {
+    if (slotIndex <= 0) {
+      onReady();
+      return;
     }
-  }
+    const x0 = origin.x;
+    const y0 = origin.y;
+    const z0 = origin.z;
+    const x1 = x0 + size - 1;
+    const y1 = y0 + roomHeight - 1;
+    const z1 = z0 + size - 1;
+    forceLoadBounds(host, dimension, x0, y0, z0, x1, y1, z1);
+    system.runTimeout(onReady, preloadTicks);
+  };
 
-  resetBox100Scores();
-  for (const player of players) {
-    const room = playerRooms.get(player.id);
-    if (!room) continue;
-    giveBox100Loadout(player);
-    teleportToRoom(player, room);
-    setDeliveredScore(player, 0);
-  }
-
-  applyBox100NightVisionToParticipants();
-  startBox100NightVisionRefreshLoop();
-
-  return { ok: true, players };
+  deps.broadcast?.("§7部屋を順番に生成します...", { priority: "high" });
+  system.runTimeout(buildNextRoom, preloadTicks);
+  return { ok: true, pending: true };
 }
 
 export function resetBox100State() {
@@ -795,6 +1170,66 @@ export function resetBox100State() {
   finishedPlayerCount = 0;
   playerRooms.clear();
   wolfEntityIds.clear();
+}
+
+/**
+ * START と同時に全員の部屋へハコイヌを並列スポーン
+ * @param {import("@minecraft/server").Player} host
+ * @param {import("@minecraft/server").Dimension} dimension
+ * @param {(ok: boolean) => void} [onComplete]
+ */
+export function releaseBox100Wolves(host, dimension, onComplete) {
+  const rooms = [...playerRooms.values()];
+  if (rooms.length === 0) {
+    onComplete?.(false);
+    return;
+  }
+
+  const cfg = getBox100Config();
+  const roomHeight = cfg.ROOM_HEIGHT ?? 10;
+  const size = cfg.ROOM_SIZE ?? 30;
+  const target = getBox100TargetCount();
+
+  for (const room of rooms) {
+    const x0 = room.origin.x;
+    const y0 = room.origin.y;
+    const z0 = room.origin.z;
+    forceLoadBounds(
+      host,
+      dimension,
+      x0,
+      y0,
+      z0,
+      x0 + size - 1,
+      y0 + roomHeight - 1,
+      z0 + size - 1
+    );
+  }
+
+  let pending = rooms.length;
+  let anySpawned = false;
+
+  const finishRelease = (wolves, room) => {
+    if (wolves > 0) {
+      anySpawned = true;
+    } else {
+      logWarn(`wolf release failed for ${room.playerName}`);
+    }
+    if (wolves > 0 && wolves < target) {
+      logWarn(`wolf release partial for ${room.playerName}: ${wolves}/${target}`);
+    }
+    pending -= 1;
+    if (pending === 0) {
+      if (!anySpawned) {
+        logWarn("wolf release finished with zero spawns");
+      }
+      onComplete?.(anySpawned);
+    }
+  };
+
+  for (const room of rooms) {
+    spawnWolvesInRoomBatched(dimension, room, (wolves) => finishRelease(wolves, room));
+  }
 }
 
 export function beginBox100Running(host) {
@@ -872,19 +1307,10 @@ export function cleanupBox100Entities(dimension, options = {}) {
   }
 
   if (removeRooms) {
-    const cfg = getBox100Config();
-    const size = cfg.ROOM_SIZE ?? 30;
-    const height = cfg.ROOM_HEIGHT ?? 10;
-    const host = resolveBox100CommandHost();
-    for (const room of playerRooms.values()) {
-      try {
-        destroyGlassRoom(host, room.origin, size, height, dim);
-        logInfo(
-          `room removed: ${room.playerName} (${room.origin.x},${room.origin.y},${room.origin.z})`
-        );
-      } catch (error) {
-        logWarn(`room destroy failed (${room.playerName}): ${error}`);
-      }
+    try {
+      destroyAllKnownArenaRooms(resolveBox100CommandHost(), dim);
+    } catch (error) {
+      logWarn(`arena room destroy failed: ${error}`);
     }
     logInfo("box100 cleanup done (rooms removed)");
   } else {
@@ -1052,16 +1478,62 @@ function formatElapsed(ms) {
   return `${min}分${sec.toString().padStart(2, "0")}秒`;
 }
 
+function clearBox100RankingSnapshot() {
+  lastRankingSnapshot = null;
+}
+
+export function snapshotBox100Ranking() {
+  if (playerRooms.size === 0) return false;
+  lastRankingSnapshot = {
+    startedAtMs: box100StartedAtMs,
+    target: getBox100TargetCount(),
+    entries: [...playerRooms.values()].map((room) => ({
+      playerName: room.playerName,
+      deliveredCount: room.deliveredCount,
+      finishedAtMs: room.finishedAtMs,
+      rank: room.rank,
+    })),
+  };
+  logInfo(`ranking snapshot saved (${lastRankingSnapshot.entries.length} entries)`);
+  return true;
+}
+
+export function hasBox100RankingResults() {
+  if (playerRooms.size > 0) return true;
+  return (lastRankingSnapshot?.entries?.length ?? 0) > 0;
+}
+
+function getBox100RankingSource() {
+  if (playerRooms.size > 0) {
+    return {
+      startedAtMs: box100StartedAtMs,
+      target: getBox100TargetCount(),
+      entries: [...playerRooms.values()].map((room) => ({
+        playerName: room.playerName,
+        deliveredCount: room.deliveredCount,
+        finishedAtMs: room.finishedAtMs,
+        rank: room.rank,
+      })),
+    };
+  }
+  if (lastRankingSnapshot) return lastRankingSnapshot;
+  return null;
+}
+
 export function buildBox100RankingLines() {
-  const target = getBox100TargetCount();
+  const source = getBox100RankingSource();
+  if (!source || source.entries.length === 0) return ["(記録なし)"];
+
+  const target = source.target;
+  const startedAtMs = source.startedAtMs;
   const finished = [];
   const unfinished = [];
 
-  for (const room of playerRooms.values()) {
-    if (room.finishedAtMs != null && room.rank != null) {
-      finished.push(room);
+  for (const entry of source.entries) {
+    if (entry.finishedAtMs != null && entry.rank != null) {
+      finished.push(entry);
     } else {
-      unfinished.push(room);
+      unfinished.push(entry);
     }
   }
 
@@ -1079,35 +1551,35 @@ export function buildBox100RankingLines() {
   const lines = [];
   let displayRank = 1;
 
-  for (const room of finished) {
-    const elapsed = formatElapsed((room.finishedAtMs ?? 0) - box100StartedAtMs);
+  for (const entry of finished) {
+    const elapsed = formatElapsed((entry.finishedAtMs ?? 0) - startedAtMs);
     lines.push(
-      `${displayRank}位：${room.playerName} - ${target}匹 - ${elapsed}`
+      `${displayRank}位：${entry.playerName} - ${target}匹 - ${elapsed}`
     );
     displayRank += 1;
   }
 
-  for (const room of unfinished) {
+  for (const entry of unfinished) {
     lines.push(
-      `${displayRank}位：${room.playerName} - ${room.deliveredCount}匹`
+      `${displayRank}位：${entry.playerName} - ${entry.deliveredCount}匹`
     );
     displayRank += 1;
   }
 
-  if (lines.length === 0) return ["(記録なし)"];
   return lines;
 }
 
-export function showBox100Ranking() {
+export function showBox100Ranking(options = {}) {
   const lines = [
     "§6ハコイヌ100匹チャレンジ終了！ランキングを発表します！",
     ...buildBox100RankingLines().map((line) => `§e${line}`),
   ];
+  const broadcastOptions = { priority: "high", ...options };
   if (typeof deps.broadcastSequence === "function") {
-    deps.broadcastSequence(lines, { priority: "high" });
+    deps.broadcastSequence(lines, broadcastOptions);
     return;
   }
   for (const line of lines) {
-    deps.broadcast?.(line, { priority: "high" });
+    deps.broadcast?.(line, broadcastOptions);
   }
 }

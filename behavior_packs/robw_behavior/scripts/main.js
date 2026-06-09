@@ -455,6 +455,8 @@ let placedChestRestore = null;
 let activeRoundCenter = null;
 /** @type {import("@minecraft/server").Dimension | null} */
 let activeRoundDimension = null;
+/** @type {"normal" | "box100" | null} */
+let lastCompletedRoundMode = null;
 let startCountdownGeneration = 0;
 let endCountdownGeneration = 0;
 /** 時間切れ時、タイマー残り秒（3・2・1）ごとに演出済みか */
@@ -1036,8 +1038,11 @@ function performFullGameReset(options = {}) {
   const wasBox100 = box100.isBox100Mode();
 
   if (wasBox100) {
+    lastCompletedRoundMode = box100.BOX100_MODE_ID;
+    box100.snapshotBox100Ranking();
     box100.cleanupBox100(dimension);
   } else {
+    lastCompletedRoundMode = "normal";
     clearSpawnedHakoinu(center, dimension);
   }
 
@@ -1078,9 +1083,17 @@ function finalizeGameAfterCeremony(options = {}) {
   const dimension = getActiveRoundDimension();
   const wasBox100 = box100.isBox100Mode();
   if (wasBox100) {
+    lastCompletedRoundMode = box100.BOX100_MODE_ID;
+    box100.snapshotBox100Ranking();
+    box100.showBox100Ranking({ forceChat: true });
     box100.cleanupBox100(dimension);
   } else {
+    lastCompletedRoundMode = "normal";
     clearSpawnedHakoinu(center, dimension);
+    broadcast("§6ゲート閉鎖！ハコイヌたちの帰還結果を発表します！", {
+      priority: "high",
+    });
+    showRanking("§6Return of BoxWorld 帰還ランキング", { forceChat: true });
   }
   activeRoundCenter = null;
   activeRoundDimension = null;
@@ -1090,14 +1103,6 @@ function finalizeGameAfterCeremony(options = {}) {
     removePlacedSubmissionChest(players[0].dimension);
   }
 
-  if (wasBox100) {
-    box100.showBox100Ranking();
-  } else {
-    broadcast("§6ゲート閉鎖！ハコイヌたちの帰還結果を発表します！", {
-      priority: "high",
-    });
-    showRanking();
-  }
   resetAllPlayersToLobbyInventory();
   logInfo("gate closed, game finished");
 }
@@ -4594,11 +4599,30 @@ function buildRankingLines() {
   });
 }
 
-function showRanking(title = "§6Return of BoxWorld 帰還ランキング") {
+function showRanking(
+  title = "§6Return of BoxWorld 帰還ランキング",
+  options = {}
+) {
   robwBroadcastSequence(
     [title, ...buildRankingLines().map((line) => `§e${line}`)],
-    { priority: "high" }
+    { priority: "high", ...options }
   );
+}
+
+function showRankingForMenu() {
+  if (box100.isBox100Mode() && box100.hasBox100RankingResults()) {
+    box100.showBox100Ranking();
+    return;
+  }
+  if (
+    gameState === "finished" &&
+    lastCompletedRoundMode === box100.BOX100_MODE_ID &&
+    box100.hasBox100RankingResults()
+  ) {
+    box100.showBox100Ranking();
+    return;
+  }
+  showRanking("§6Return of BoxWorld 帰還ランキング");
 }
 
 // ---------------------------------------------------------------------------
@@ -5305,12 +5329,27 @@ function handlePlayerRoundRespawn(player) {
 }
 
 function beginGameRoundBox100(host) {
+  const dimension = getActiveRoundDimension() ?? host.dimension;
+  if (!dimension) {
+    robwPlayerMessage(host, "§c戦場のディメンションを取得できませんでした。");
+    gameState = "waiting";
+    box100.cleanupBox100Entities(host.dimension, { removeRooms: true });
+    box100.resetBox100State();
+    return;
+  }
+
   gameState = "running";
   const startedMs = Date.now();
   gameEndWallMs = startedMs + box100.getBox100TimeLimitMs();
   nextTimeNotifyWallMs = startedMs + TIME_NOTIFY_INTERVAL_MS;
 
   box100.beginBox100Running(host);
+  box100.releaseBox100Wolves(host, dimension, (ok) => {
+    if (!ok) {
+      broadcast("§c一部の部屋にハコイヌを出せませんでした。", { priority: "high" });
+      logWarn("box100 wolf release had zero spawns in at least one room");
+    }
+  });
 
   enableRoundImmediateRespawn();
 
@@ -5442,17 +5481,19 @@ function continueStartGameBox100(host, validation) {
   activeRoundDimension = validation.dimension;
   applyDaytimeLock();
 
-  const prepared = box100.prepareBox100Arena(host, validation.dimension);
-  if (!prepared.ok) {
-    box100.resetBox100State();
-    clearSavedPlayerPreRoundState();
-    robwPlayerMessage(host, prepared.message ?? "§c部屋の準備に失敗しました。");
-    logWarn(`box100 prepare failed: ${prepared.message ?? "unknown"}`);
-    return;
-  }
+  box100.prepareBox100Arena(host, validation.dimension, validation.center, (prepared) => {
+    if (!prepared.ok) {
+      box100.cleanupBox100Entities(validation.dimension, { removeRooms: true });
+      box100.resetBox100State();
+      clearSavedPlayerPreRoundState();
+      robwPlayerMessage(host, prepared.message ?? "§c部屋の準備に失敗しました。");
+      logWarn(`box100 prepare failed: ${prepared.message ?? "unknown"}`);
+      return;
+    }
 
-  runStartCountdown(host, validation, () => {
-    beginGameRound(host, validation);
+    runStartCountdown(host, validation, () => {
+      beginGameRound(host, validation);
+    });
   });
 }
 
@@ -5826,7 +5867,7 @@ function runRobwSubcommand(sub, player, extraArgs = []) {
       resetGame();
       break;
     case "ranking":
-      showRanking("§6Return of BoxWorld 帰還ランキング");
+      showRankingForMenu();
       break;
     default:
       if (player) {
